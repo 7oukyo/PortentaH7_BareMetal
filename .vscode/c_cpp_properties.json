@@ -1,0 +1,31 @@
+{
+    "configurations": [
+        {
+            "name": "STM32H747-CM7",
+            "includePath": [
+                "${workspaceFolder}/include",
+                "${workspaceFolder}/src",
+                "${workspaceFolder}/drivers/CMSIS/Include",
+                "${workspaceFolder}/drivers/CMSIS/Device/ST/STM32H7xx/Include",
+                "${workspaceFolder}/drivers/STM32H7xx_HAL_Driver/Inc",
+                "${workspaceFolder}/drivers/STM32H7xx_HAL_Driver/Inc/Legacy"
+            ],
+            "defines": [
+                "USE_HAL_DRIVER",
+                "STM32H747xx",
+                "CORE_CM7"
+            ],
+            "compilerPath": "arm-none-eabi-gcc",
+            "cStandard": "c11",
+            "cppStandard": "c++17",
+            "intelliSenseMode": "gcc-arm",
+            "browse": {
+                "path": [
+                    "${workspaceFolder}"
+                ],
+                "limitSymbolsToIncludedHeaders": true
+            }
+        }
+    ],
+    "version": 4
+}

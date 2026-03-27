@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cp -r reference/Portenta_Cube_Template/Drivers/CMSIS drivers/)",
+      "Bash(cp -r reference/Portenta_Cube_Template/Drivers/STM32H7xx_HAL_Driver drivers/)",
+      "Bash(make)",
+      "Bash(make clean)",
+      "Bash(make flash:*)",
+      "Bash(arm-none-eabi-*)",
+      "Bash(openocd*)",
+      "Bash(mkdir*)",
+      "Bash(cp*)"
+    ]
+  }
+}
