@@ -2,3 +2,4 @@ build/
 reference/Portenta_Cube_Template
 .vscode/settings.json
 null
+.markdownlint.json

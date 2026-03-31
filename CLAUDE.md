@@ -57,7 +57,7 @@ Goal: direct hardware control via STM32 HAL and register-level programming.
 - Pure C (C11). No C++ files. File extensions: .c and .h only.
 - Use STM32 HAL for peripheral init. Direct register access acceptable for performance-critical paths but must be commented with register name and RM0399 section number.
 - Every function has a brief comment explaining purpose. No boilerplate filler comments.
-- **PMIC init order**: HAL_Init() → PH1 enable → SystemClock_Config() → I2C1 init → PMIC_Init(). The MCU boots on PMIC OTP default voltages; HAL and clock config do NOT require PMIC to be configured first. This matches the working reference project. (Corrected 2026-03-26: earlier assumption that PMIC must be called before HAL was wrong and caused cold boot failures.)
+- **PMIC init order**: PJ0 LOW (PMIC STANDBY → RUN) → HAL_Init() → PH1 HIGH (oscillator enable) → SystemClock_Config() → I2C1 init → PMIC_Init(). PJ0 must be driven LOW before HAL_Init or PMIC may enter standby. The MCU boots on PMIC OTP default voltages; HAL and clock config do NOT require PMIC to be configured first. This matches the working reference project. (Corrected 2026-03-26: earlier assumption that PMIC must be called before HAL was wrong and caused cold boot failures.)
 - Linker script places code at 0x08000000 (no bootloader). Do not add bootloader offset unless explicitly asked.
 - HAL driver files in drivers/ are never modified. Override behavior via stm32h7xx_hal_msp.c callbacks.
 - Interrupt handlers go in stm32h7xx_it.c, not scattered across files.

@@ -203,12 +203,14 @@ Shared pins: PC2/PC3 shared with ANALOG and SAI2A.
 
 HD connector CAN pins:
 
-| HD Pin | Signal    | MCU Pin | Peripheral |
-|--------|-----------|---------|------------|
-| J1-49  | CAN1_TX   | PH13    | FDCAN1_TX  |
-| J1-51  | CAN1_RX   | PB8     | FDCAN1_RX  |
+| HD Pin | Signal    | MCU Pin | Peripheral | Notes |
+|--------|-----------|---------|------------|-------|
+| J1-49  | CAN1_TX   | PH13    | FDCAN1_TX  | Available — routed on breakout board |
+| J1-51  | CAN1_RX   | PB8     | FDCAN1_RX  | Available — routed on breakout board |
+| J1-50  | CAN0_TX   | —       | —          | Breakout board label only — NOT connected on Portenta schematic |
+| J1-52  | CAN0_RX   | —       | —          | Breakout board label only — NOT connected on Portenta schematic |
 
-CAN0 on HD is unavailable.
+Only CAN1 (PH13/PB8, FDCAN1) is usable. CAN0 pins on the breakout board are dummy — no MCU connection.
 
 ---
 
@@ -428,8 +430,8 @@ Charge LED DL2 (HSMD-C190): PMIC CHGB output (U10 pin 40), R14 330R. Active low.
 | 43  | I2C1_SDA        | PB7      | 44  | I2C0_SDA        | PH8      |
 | 45  | I2C1_SCL        | PB6      | 46  | I2C0_SCL        | PH7      |
 | 47  | GND             | n/a      | 48  | VIN             | Power    |
-| 49  | CAN1_TX         | PH13     | 50  | CAN0_TX         | PB8      |
-| 51  | CAN1_RX         | PH14     | 52  | CAN0_RX         | PB9      |
+| 49  | CAN1_TX         | PH13     | 50  | CAN0_TX         | n/a (dummy) |
+| 51  | CAN1_RX         | PB8      | 52  | CAN0_RX         | n/a (dummy) |
 | 53  | VSYS            | VSYS     | 54  | GND             | n/a      |
 | 55  | SDC_CLK         | PD6      | 56  | I2S_CK          | PD3      |
 | 57  | SDC_CMD         | PD7      | 58  | I2S_WS          | PB9      |
@@ -478,11 +480,11 @@ Charge LED DL2 (HSMD-C190): PMIC CHGB output (U10 pin 40), R14 330R. Active low.
 | 53  | SAI_D0          | PE6      | 54  | GPIO_4          | PE3      |
 | 55  | SAI_D1          | PI5      | 56  | GPIO_5          | PG3      |
 | 57  | GND             | n/a      | 58  | GPIO_6          | PG10     |
-| 59  | PWM_0           | PA8      | 60  | PWM_5           | PC6      |
-| 61  | PWM_1           | PC7      | 62  | PWM_6           | PG7      |
-| 63  | PWM_2           | PJ11     | 64  | PWM_7           | PK1      |
-| 65  | PWM_3           | PH15     | 66  | PWM_8           | PJ7      |
-| 67  | PWM_4           | PJ10     | 68  | PWM_9           | PH6      |
+| 59  | PWM_0           | PA8      | 60  | PWM_5           | PK1      |
+| 61  | PWM_1           | PC6      | 62  | PWM_6           | PH15     |
+| 63  | PWM_2           | PC7      | 64  | PWM_7           | PJ7      |
+| 65  | PWM_3           | PG7      | 66  | PWM_8           | PJ10     |
+| 67  | PWM_4           | PJ11     | 68  | PWM_9           | PH6      |
 | 69  | VCC             | +3V3     | 70  | GND             | n/a      |
 | 71  | ANALOG_VREF_P   | AREF+    | 72  | ANALOG_VREF_N   | GND      |
 | 73  | ANALOG_A0       | PA0_C    | 74  | ANALOG_A4       | PA4      |
@@ -670,9 +672,9 @@ This means: on a true cold boot (no Arduino bootloader having configured PMIC fi
 |----------|---------|-------|-------|
 | VIN      | 4.1-6V  | USB-C or J4 | Board input, through D1 to VSYS |
 | VSYS     | ~VIN    | D1 output | PMIC buck input, fuel gauge |
-| +3V1SW   | 3.1V (nom) | PMIC SW1 | MCU core, most digital |
-| +3V3     | 3.3V    | PMIC SW2 | HD/MKR VCC, ETH VDDIO |
-| +3V1     | 3.1V    | PMIC SW3 | Analog, pullups, LDO input |
+| +3V1SW   | 3.3V    | PMIC SW1 | SDRAM VDD, Ethernet VDDIO, USB3320 VDDIO |
+| +3V3     | 3.3V    | PMIC SW2 | HD/MKR VCC, JTAG VCC |
+| +3V1     | 3.1V    | PMIC SW3 | MCU VDD/VDDA/VDDUSB, oscillators, LEDs, LDO input |
 | +1V0     | 1.0V    | PMIC VLDO1 | ANX7625 core |
 | +1V8     | 1.8V    | PMIC VLDO2 | ANX7625 I/O, USB3320 |
 | +1V2     | 1.2V    | PMIC VLDO3 | TBD |

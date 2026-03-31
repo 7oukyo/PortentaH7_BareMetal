@@ -28,6 +28,7 @@ Hardware PWM output is impossible on these pins. Software PWM via timer interrup
 `src/led_pwm.c` / `include/led_pwm.h`
 
 **ISR logic (HAL_TIM_PeriodElapsedCallback)**:
+
 - Software counter 0..99 increments each ISR tick
 - BSRR single-register write drives all three LED pins per tick
 - Active LOW: `counter < duty` -> pin LOW (LED on); else pin HIGH (LED off)
@@ -40,10 +41,12 @@ Hardware PWM output is impossible on these pins. Software PWM via timer interrup
 ## HAL modules required
 
 Add both to HAL_SRC in Makefile:
+
 - `stm32h7xx_hal_tim.c`
 - `stm32h7xx_hal_tim_ex.c` — required: HAL_TIM_IRQHandler calls callbacks defined here
 
 Enable in stm32h7xx_hal_conf.h:
+
 ```c
 #define HAL_TIM_MODULE_ENABLED
 ```

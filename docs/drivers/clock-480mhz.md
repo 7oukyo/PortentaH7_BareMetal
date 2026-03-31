@@ -55,9 +55,9 @@ const uint8_t D1CorePrescTable[16] = {0,0,0,0,1,2,3,4,1,2,3,4,6,7,8,9};
 ## Minimal usage
 
 ```c
-// In main(), after PMIC_EarlyInit() and HAL_Init():
+// In main(), after PJ0 LOW and HAL_Init():
 __HAL_RCC_GPIOH_CLK_ENABLE();
-// drive PH1 high (oscillator enable)
+// drive PH1 high (oscillator enable), HAL_Delay(10)
 ...
 SystemClock_Config();  // defined in main.c
 ```
