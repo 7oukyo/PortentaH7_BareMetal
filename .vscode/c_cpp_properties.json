@@ -8,7 +8,9 @@
                 "${workspaceFolder}/drivers/CMSIS/Include",
                 "${workspaceFolder}/drivers/CMSIS/Device/ST/STM32H7xx/Include",
                 "${workspaceFolder}/drivers/STM32H7xx_HAL_Driver/Inc",
-                "${workspaceFolder}/drivers/STM32H7xx_HAL_Driver/Inc/Legacy"
+                "${workspaceFolder}/drivers/STM32H7xx_HAL_Driver/Inc/Legacy",
+                "${workspaceFolder}/middlewares/ST/USB_Device_Library/Core/Inc",
+                "${workspaceFolder}/middlewares/ST/USB_Device_Library/Class/CDC/Inc"
             ],
             "defines": [
                 "USE_HAL_DRIVER",

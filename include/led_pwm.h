@@ -1,10 +1,9 @@
 /**
  * @file led_pwm.h
- * @brief Software PWM rainbow cycling on the Portenta H7 onboard RGB LED.
+ * @brief LED feedback blink and serial heartbeat.
  *
- * PK5/PK6/PK7 have no hardware timer output, so PWM is generated in a
- * TIM6 interrupt. TIM6 fires at 10kHz; 100 ticks = one PWM period (100Hz).
- * Hue advances once per PWM period, cycling the full rainbow in ~3.6s.
+ * Green LED blinks briefly on serial RX. Heartbeat prints uptime
+ * over CDC every 5 seconds. TIM6 runs at 10kHz for blink timing.
  */
 
 #ifndef LED_PWM_H
@@ -14,7 +13,13 @@
 
 extern TIM_HandleTypeDef htim6;
 
-/** Initialize TIM6 and start the rainbow PWM interrupt. */
+/** Initialize TIM6 for blink timing. */
 void LedPwm_Init(void);
+
+/** Trigger a short green LED blink (call from CDC receive). */
+void LedPwm_BlinkOnRx(void);
+
+/** Poll from main loop — sends uptime heartbeat every 5 seconds. */
+void LedPwm_HeartbeatPoll(void);
 
 #endif /* LED_PWM_H */

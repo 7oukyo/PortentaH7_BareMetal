@@ -1,31 +1,16 @@
 /**
  * @file main.c
- * @brief Portenta H7 bare-metal entry point.
+ * @brief Portenta H7 bare-metal entry point (CM7 only).
  *
- * Ported from reference: Portenta_Cube_Template/CM7/Core/Src/main.c
- * Every init decision matches the reference project exactly.
- *
- * Initialization order (from reference):
- *  1. PJ0 LOW — PMIC STANDBY pin, must be driven LOW for RUN mode.
- *  2. Enable CM4 boot (Portenta fuses disable CM4 by default).
- *  3. Wait for CM4 to enter stop mode.
- *  4. HAL_Init() — SysTick, HAL state.
- *  5. Enable PH1 (oscillator enable pin).
- *  6. SystemClock_Config() — HSE 25MHz -> PLL1 -> 480MHz CM7.
- *  7. PeriphCommonClock_Config() — PLL2 for SPI clocks.
- *  8. HSEM synchronization — release CM4 from stop mode.
- *  9. Wait for CM4 to fully wake (D2CKRDY + NOP delay).
- * 10. GPIO init, I2C1 init, PMIC_Init().
- * 11. LED PWM rainbow start.
+ * Init order: PJ0 LOW -> HAL_Init -> I-Cache -> PH1 HIGH (oscillator) ->
+ * SystemClock_Config (480 MHz) -> PeriphCommonClock (PLL2) -> GPIO LEDs ->
+ * PMIC_Init (I2C1) -> LED PWM rainbow. See docs/current-config.md.
  */
 
 #include "main.h"
 #include "pmic.h"
 #include "led_pwm.h"
-
-#ifndef HSEM_ID_0
-#define HSEM_ID_0 (0U)
-#endif
+#include "usb_device.h"
 
 static void SystemClock_Config(void);
 static void PeriphCommonClock_Config(void);
@@ -33,7 +18,7 @@ static void GPIO_LEDs_Init(void);
 
 int main(void)
 {
-    /* === Reference line 257-264: PJ0 LOW for PMIC RUN mode === */
+    /* PJ0 LOW — PMIC STANDBY pin must be LOW for RUN mode before anything. */
     GPIO_InitTypeDef GPIO_InitStruct;
 
     __HAL_RCC_GPIOJ_CLK_ENABLE();
@@ -45,41 +30,48 @@ int main(void)
     GPIO_InitStruct.Pin   = GPIO_PIN_0;
     HAL_GPIO_Init(GPIOJ, &GPIO_InitStruct);
 
-    /* === Reference line 267: Boot up CM4 core === */
-    /* DISABLED: we have no CM4 firmware. Enabling CM4 boot causes it to
-     * run stale code from flash bank 2 (old Arduino bootloader), which
-     * blinks blue LED and may interfere with CM7 operation. */
-    // HAL_RCCEx_EnableBootCore(RCC_BOOT_C2);
+    /* CM4 boot disabled — no CM4 firmware, stale flash bank 2 causes interference. */
 
-    /* === Reference line 301: HAL_Init === */
     HAL_Init();
 
-    /* === Reference line 306-314: Enable oscillator pin PH1 === */
+    /* I-Cache improves code fetch from flash. D-Cache skipped — breaks
+     * DMA-based peripherals (Ethernet) without cache maintenance. */
+    SCB_EnableICache();
+
+    /* Enable 25 MHz oscillator: PH1 HIGH gates OSCEN net. */
     __HAL_RCC_GPIOH_CLK_ENABLE();
-    GPIO_InitTypeDef gpio_osc_init_structure;
-    gpio_osc_init_structure.Pin   = GPIO_PIN_1;
-    gpio_osc_init_structure.Mode  = GPIO_MODE_OUTPUT_PP;
-    gpio_osc_init_structure.Pull  = GPIO_PULLUP;
-    gpio_osc_init_structure.Speed = GPIO_SPEED_FREQ_LOW;
-    HAL_GPIO_Init(GPIOH, &gpio_osc_init_structure);
-    HAL_Delay(10);
+    GPIO_InitTypeDef gpio_osc = {0};
+    gpio_osc.Pin   = GPIO_PIN_1;
+    gpio_osc.Mode  = GPIO_MODE_OUTPUT_PP;
+    gpio_osc.Pull  = GPIO_NOPULL;
+    gpio_osc.Speed = GPIO_SPEED_FREQ_LOW;
+    HAL_GPIO_Init(GPIOH, &gpio_osc);
     HAL_GPIO_WritePin(GPIOH, GPIO_PIN_1, GPIO_PIN_SET);
+    HAL_Delay(10);  /* oscillator startup time */
 
-    /* === Reference line 319: System clock config === */
     SystemClock_Config();
-
-    /* === Reference line 323: Peripheral common clock (PLL2 for SPI) === */
     PeriphCommonClock_Config();
 
-    /* === Reference line 327-343: HSEM synchronization with CM4 === */
-    /* DISABLED: CM4 not booted, no synchronization needed.
-     * Re-enable when CM4 firmware is added. */
-
-    /* === Reference line 351-353: Initialize peripherals === */
     GPIO_LEDs_Init();
 
     /* PMIC init via HAL I2C1 — sets SW1/SW2 to 3.3V, configures LDOs */
     PMIC_Init();
+
+    /* USB3320 ULPI PHY reset via PJ4: low -> high with delays.
+     * Requires SW1 (+3V1SW) and LDO2 (+1V8) from PMIC to be up. */
+    GPIO_InitTypeDef gpio_usb = {0};
+    gpio_usb.Pin   = GPIO_PIN_4;
+    gpio_usb.Mode  = GPIO_MODE_OUTPUT_PP;
+    gpio_usb.Pull  = GPIO_NOPULL;
+    gpio_usb.Speed = GPIO_SPEED_FREQ_LOW;
+    HAL_GPIO_Init(GPIOJ, &gpio_usb);
+    HAL_GPIO_WritePin(GPIOJ, GPIO_PIN_4, GPIO_PIN_RESET);
+    HAL_Delay(10);
+    HAL_GPIO_WritePin(GPIOJ, GPIO_PIN_4, GPIO_PIN_SET);
+    HAL_Delay(10);
+
+    /* USB CDC Virtual COM Port over USB-C (USB3320 ULPI PHY) */
+    MX_USB_DEVICE_Init();
 
     /* All LEDs off before PWM starts */
     HAL_GPIO_WritePin(LED_GPIO_PORT,
@@ -91,14 +83,11 @@ int main(void)
 
     while (1)
     {
-        __WFI();
+        LedPwm_HeartbeatPoll();
     }
 }
 
-/**
- * @brief System Clock Configuration — 480MHz from HSE 25MHz.
- * Ported verbatim from reference lines 427-483.
- */
+/** @brief System Clock — HSE 25 MHz -> PLL1 -> 480 MHz SYSCLK. */
 static void SystemClock_Config(void)
 {
     RCC_OscInitTypeDef RCC_OscInitStruct = {0};
@@ -146,10 +135,7 @@ static void SystemClock_Config(void)
     }
 }
 
-/**
- * @brief Peripheral common clock — PLL2 for SPI2/SPI5.
- * Ported verbatim from reference lines 491-512.
- */
+/** @brief PLL2 for SPI2/SPI5 peripheral clocks. */
 static void PeriphCommonClock_Config(void)
 {
     RCC_PeriphCLKInitTypeDef PeriphClkInitStruct = {0};

@@ -1,6 +1,6 @@
 # GPIO — Onboard RGB LED (GPIOK)
 
-**Status**: VERIFIED 2026-03-25
+**Status**: VERIFIED 2026-04-01
 
 ## Hardware
 
@@ -41,6 +41,14 @@ HAL_GPIO_WritePin(GPIOK, GPIO_PIN_6, GPIO_PIN_SET);
 HAL_GPIO_TogglePin(GPIOK, GPIO_PIN_6);
 HAL_Delay(500);
 ```
+
+## Current LED Roles
+
+| LED   | Function                          | Trigger                     |
+|-------|-----------------------------------|-----------------------------|
+| Green | RX blink (~50ms)                  | `LedPwm_BlinkOnRx()` from CDC receive |
+| Blue  | Alive pulse (~30ms every 5s)      | `LedPwm_HeartbeatPoll()` from main loop |
+| Red   | Unused (available for error/fault) | —                           |
 
 ## Gotchas
 

@@ -1,8 +1,6 @@
 /**
  * @file stm32h7xx_hal_conf.h
- * @brief HAL configuration — minimal set for rainbow LED PWM milestone.
- *        Enabled: GPIO, RCC, PWR, I2C, CORTEX, DMA, MDMA, FLASH, EXTI, HSEM, TIM.
- *        Disabled: ETH, USB, ADC, SPI, UART, etc.
+ * @brief HAL configuration for Portenta H7 bare-metal firmware.
  */
 
 #ifndef STM32H7xx_HAL_CONF_H
@@ -26,6 +24,7 @@ extern "C" {
 #define HAL_CORTEX_MODULE_ENABLED
 #define HAL_HSEM_MODULE_ENABLED
 #define HAL_TIM_MODULE_ENABLED
+#define HAL_PCD_MODULE_ENABLED
 
 /* ########################## Oscillator Values ############################# */
 #if !defined(HSE_VALUE)
@@ -153,6 +152,9 @@ extern "C" {
 #endif
 #ifdef HAL_TIM_MODULE_ENABLED
   #include "stm32h7xx_hal_tim.h"
+#endif
+#ifdef HAL_PCD_MODULE_ENABLED
+  #include "stm32h7xx_hal_pcd.h"
 #endif
 
 /* Assert macro */

@@ -1,6 +1,7 @@
 {
   "permissions": {
     "allow": [
+      "Bash(*)",
       "Bash(cp -r reference/Portenta_Cube_Template/Drivers/CMSIS drivers/)",
       "Bash(cp -r reference/Portenta_Cube_Template/Drivers/STM32H7xx_HAL_Driver drivers/)",
       "Bash(make)",
@@ -9,7 +10,8 @@
       "Bash(arm-none-eabi-*)",
       "Bash(openocd*)",
       "Bash(mkdir*)",
-      "Bash(cp*)"
+      "Bash(cp*)",
+      "Bash(find /x/Portenta_H7_Stuff/PortentaH7_Claude -name Makefile -o -name *.ld -o -name *.s)"
     ]
   }
 }

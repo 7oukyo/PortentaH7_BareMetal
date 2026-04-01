@@ -6,29 +6,20 @@ Bare metal firmware for Arduino Portenta H7 (STM32H747XIH6, dual Cortex-M7/M4).
 Using CM7 core only. No Arduino framework, no mbed, no RTOS (initially).
 Goal: direct hardware control via STM32 HAL and register-level programming.
 
-## Hardware
+## Hardware & config quick reference
 
-- **MCU**: STM32H747XIH6 — CM7 @ 480MHz, CM4 @ 240MHz (CM4 disabled for now)
-- **Board**: Arduino Portenta H7 mounted on Portenta Breakout Board
-- **Debugger**: ST-Link V3 Mini connected via SWD through breakout 20-pin JTAG header
-- **PMIC**: NXP PF1550 on I2C1 (SCL=PB6, SDA=PB7, AF4, addr 0x08). Configured after HAL_Init and SystemClock_Config — MCU boots on OTP default voltages. See init order below.
-- **External SDRAM**: 8MB at 0xC0000000 via FMC (not used initially)
-- **HSE crystal**: 25MHz (used as PLL source for 480MHz CM7 clock)
+See `docs/current-config.md` for the full current state: memory map, clock tree, PMIC registers, init sequence, and OTP boot behavior. This file focuses on rules and conventions.
 
-## Memory map (no Arduino bootloader — full flash)
+Key facts repeated here for convenience:
 
-| Region   | Start        | Size   | Usage                          |
-|----------|--------------|--------|--------------------------------|
-| Flash    | 0x08000000   | 2MB    | Firmware code + const data     |
-| DTCMRAM  | 0x20000000   | 128KB  | Stack, fast variables          |
-| AXI SRAM | 0x24000000   | 512KB  | Heap, large buffers            |
-| SRAM D2  | 0x30000000   | 288KB  | DMA buffers, shared mem        |
-| SRAM D3  | 0x38000000   | 64KB   | Available                      |
-| SDRAM    | 0xC0000000   | 8MB    | External, requires FMC init    |
+- **MCU**: STM32H747XIH6 — CM7 @ 480 MHz (CM4 disabled, see config doc for why)
+- **Board**: Arduino Portenta H7 on Portenta Breakout Board
+- **Debugger**: ST-Link V3 Mini via SWD
+- **PMIC**: NXP PF1550 on I2C1 (PB6/PB7, addr 0x08), called after HAL_Init + SystemClock_Config
 
 ## Toolchain
 
-- **Compiler**: arm-none-eabi-gcc (specify -mcpu=cortex-m7 -mfpu=fpv5-d16 -mfloat-abi=hard)
+- **Compiler**: arm-none-eabi-gcc (-mcpu=cortex-m7 -mfpu=fpv5-d16 -mfloat-abi=hard)
 - **Build**: GNU Make (Makefile in project root)
 - **Flash/debug**: OpenOCD with `interface/stlink-dap.cfg` and `target/stm32h7x.cfg`
 - **IDE**: VS Code with Cortex-Debug extension (launch.json and tasks.json in .vscode/)
@@ -49,7 +40,7 @@ Goal: direct hardware control via STM32 HAL and register-level programming.
 - `include/` — project headers and stm32h7xx_hal_conf.h
 - `drivers/` — STM32 HAL driver source and CMSIS headers (do NOT modify these)
 - `reference/` — skjafar's Portenta_Cube_Template repo (read-only, extract init code from here)
-- `docs/` — datasheets, register maps, hardware notes, debugging findings
+- `docs/` — hardware notes, peripheral driver docs, current config, schematic reference
 - `build/` — compiler output (gitignored)
 
 ## Code rules
@@ -57,7 +48,6 @@ Goal: direct hardware control via STM32 HAL and register-level programming.
 - Pure C (C11). No C++ files. File extensions: .c and .h only.
 - Use STM32 HAL for peripheral init. Direct register access acceptable for performance-critical paths but must be commented with register name and RM0399 section number.
 - Every function has a brief comment explaining purpose. No boilerplate filler comments.
-- **PMIC init order**: PJ0 LOW (PMIC STANDBY → RUN) → HAL_Init() → PH1 HIGH (oscillator enable) → SystemClock_Config() → I2C1 init → PMIC_Init(). PJ0 must be driven LOW before HAL_Init or PMIC may enter standby. The MCU boots on PMIC OTP default voltages; HAL and clock config do NOT require PMIC to be configured first. This matches the working reference project. (Corrected 2026-03-26: earlier assumption that PMIC must be called before HAL was wrong and caused cold boot failures.)
 - Linker script places code at 0x08000000 (no bootloader). Do not add bootloader offset unless explicitly asked.
 - HAL driver files in drivers/ are never modified. Override behavior via stm32h7xx_hal_msp.c callbacks.
 - Interrupt handlers go in stm32h7xx_it.c, not scattered across files.
@@ -95,25 +85,16 @@ This project is a prototype workbench — each peripheral/module integration mus
 
 1. Update `docs/peripheral-status.md` — mark the peripheral as VERIFIED with the date and a one-line summary.
 2. Create `docs/drivers/<peripheral-name>.md` — document: what pins/bus it uses, initialization order, any gotchas or workarounds discovered, and a minimal usage example (function call sequence to init and use it).
-3. Do NOT update CLAUDE.md. The peripheral-status file is the living tracker.
-
-## OpenOCD flash command
-
-```
-openocd -f openocd.cfg \
-  -c "program build/firmware.bin 0x08000000 verify reset exit"
-```
+3. Update `docs/current-config.md` if the new peripheral changes the init sequence, clock tree, or memory layout.
+4. Do NOT add per-peripheral details to this file. The peripheral-status file and current-config doc are the living trackers.
 
 ## Reference material
 
 - skjafar's Portenta_Cube_Template in `reference/` — working clock config, PMIC init, ETH setup, FreeRTOS integration. Extract and adapt, do not copy the CubeIDE project structure.
+- `docs/portenta_h7_schematic_reference.md` — full pin map, power architecture, bus routing extracted from official Arduino schematic.
 - `docs/` contains extracted sections from STM32H747 reference manual (RM0399) and PF1550 datasheet. Do not assume register layouts from memory — always check `docs/` or search the web for the specific register/peripheral before writing driver code.
 - When a peripheral's register details are not in `docs/`, tell the user which RM0399 section or datasheet page is needed. Do not guess register addresses or bit fields.
 
 ## Project purpose
 
 This is a hardware prototype workbench, not a product. The goal is to build a library of verified, reusable peripheral drivers and external module integrations on the Portenta H7. Each peripheral is brought up independently, tested, then kept in the codebase for future use. The main.c should be structured so that peripheral demos can be enabled/disabled with #define flags.
-
-## Current task
-
-Fix PMIC cold boot. Rewrite pmic.c to use HAL I2C1 (matching reference), called after HAL_Init and SystemClock_Config. Previous bare-register pre-HAL approach failed on cold boot.

@@ -1,55 +1,34 @@
 /**
  * @file led_pwm.c
- * @brief Software PWM rainbow cycling for onboard RGB LED (PK5/PK6/PK7).
+ * @brief LED feedback blink for serial RX and periodic serial heartbeat.
  *
- * PK5/PK6/PK7 have no hardware timer PWM alternate function (FMC/LTDC pins).
- * TIM6 (basic timer, APB1) generates interrupts at 10kHz; each ISR tick
- * drives the GPIO based on a software PWM counter vs per-channel duty value.
- *
- * Timing (after SystemClock_Config: APB1=120MHz, TIM6 clock=240MHz):
- *   PSC=2399, ARR=9 → TIM6 overflow at 240MHz/2400/10 = 10kHz
- *   PWM period  = 100 ticks  → PWM frequency = 100Hz
- *   Hue update  = every PWM period (100 ticks = 10ms)
- *   Rainbow cycle = 360 hue steps × 10ms = 3.6s
+ * Replaces rainbow PWM with simple green blink on serial receive.
+ * TIM6 still runs at 10kHz to time the blink duration (~50ms).
+ * Also provides a 5-second heartbeat that prints uptime over CDC.
  *
  * RM0399 §43 — TIM6 basic timer.
  */
 
 #include "led_pwm.h"
+#include "usbd_cdc_if.h"
 
-#define PWM_PERIOD   100U   /* software PWM counter range 0..99 */
+#define BLINK_TICKS     500U   /* 500 ticks @ 10kHz = 50ms blink */
+#define HEARTBEAT_MS    5000U  /* 5 seconds */
 
 TIM_HandleTypeDef htim6;
 
-/**
- * @brief Convert HSV (H: 0-359, S=V=100%) to RGB duty values (0-100).
- * Full saturation and value simplify the formula — p=0, t and q only vary.
- */
-static void hsv_to_rgb(uint16_t h, uint8_t *r, uint8_t *g, uint8_t *b)
-{
-    uint16_t region = h / 60U;
-    uint16_t rem    = h % 60U;
-    uint8_t  q = (uint8_t)(PWM_PERIOD - (PWM_PERIOD * rem) / 60U);  /* falling */
-    uint8_t  t = (uint8_t)((PWM_PERIOD * rem) / 60U);               /* rising  */
+static volatile uint16_t blink_counter = 0;
+static volatile uint8_t  blink_active  = 0;
 
-    switch (region) {
-        case 0: *r = PWM_PERIOD; *g = t;          *b = 0;          break;
-        case 1: *r = q;          *g = PWM_PERIOD; *b = 0;          break;
-        case 2: *r = 0;          *g = PWM_PERIOD; *b = t;          break;
-        case 3: *r = 0;          *g = q;          *b = PWM_PERIOD; break;
-        case 4: *r = t;          *g = 0;          *b = PWM_PERIOD; break;
-        case 5: *r = PWM_PERIOD; *g = 0;          *b = q;          break;
-        default: *r = 0; *g = 0; *b = 0; break;
-    }
+/** Trigger a short green LED blink. Called from CDC receive callback. */
+void LedPwm_BlinkOnRx(void)
+{
+    /* Turn green LED on (active LOW) */
+    HAL_GPIO_WritePin(LED_GPIO_PORT, LED_GREEN_PIN, GPIO_PIN_RESET);
+    blink_counter = BLINK_TICKS;
+    blink_active  = 1;
 }
 
-/**
- * @brief Initialize TIM6 for 10kHz interrupt and start rainbow PWM.
- *
- * TIM6 clock source: APB1 timer clock = 240MHz (APB1 prescaler=2 → ×2).
- * PSC=2399 → tick clock 100kHz. ARR=9 → overflow every 10 ticks = 10kHz.
- * HAL_TIM_Base_MspInit() (in stm32h7xx_hal_msp.c) enables the clock and NVIC.
- */
 void LedPwm_Init(void)
 {
     htim6.Instance               = TIM6;
@@ -66,38 +45,79 @@ void LedPwm_Init(void)
     }
 }
 
-/**
- * @brief TIM6 period elapsed callback — software PWM + rainbow hue advance.
- *
- * Runs at 10kHz. Drives PK5/PK6/PK7 via BSRR (single register write for all
- * three channels). Active LOW: BSRR[31:16] resets pin (LED on), [15:0] sets
- * pin (LED off). RM0399 §11.4.7 — GPIOx_BSRR.
- *
- * Hue advances once per PWM_PERIOD ticks (every 10ms), cycling 0-359.
- */
+/** TIM6 ISR callback — counts down blink timer and turns LED off. */
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
     if (htim->Instance != TIM6) {
         return;
     }
 
-    static uint8_t  pwm_counter = 0;
-    static uint16_t hue         = 0;
-    static uint8_t  duty_r      = PWM_PERIOD;  /* start: red */
-    static uint8_t  duty_g      = 0;
-    static uint8_t  duty_b      = 0;
+    if (blink_active) {
+        if (blink_counter > 0) {
+            blink_counter--;
+        } else {
+            /* Turn green LED off (active LOW: SET = off) */
+            HAL_GPIO_WritePin(LED_GPIO_PORT, LED_GREEN_PIN, GPIO_PIN_SET);
+            blink_active = 0;
+        }
+    }
+}
 
-    /* Single BSRR write: active LOW — counter < duty means LED on (pin LOW). */
-    uint32_t bsrr = 0;
-    bsrr |= (pwm_counter < duty_r) ? ((uint32_t)LED_RED_PIN   << 16) : LED_RED_PIN;
-    bsrr |= (pwm_counter < duty_g) ? ((uint32_t)LED_GREEN_PIN << 16) : LED_GREEN_PIN;
-    bsrr |= (pwm_counter < duty_b) ? ((uint32_t)LED_BLUE_PIN  << 16) : LED_BLUE_PIN;
-    LED_GPIO_PORT->BSRR = bsrr;
+/** Write decimal number into buffer, return pointer past last digit. */
+static char *uint_to_str(char *dst, uint32_t val)
+{
+    char tmp[10];
+    int i = 0;
+    if (val == 0) {
+        *dst++ = '0';
+        return dst;
+    }
+    while (val > 0) {
+        tmp[i++] = '0' + (char)(val % 10U);
+        val /= 10U;
+    }
+    while (i > 0) {
+        *dst++ = tmp[--i];
+    }
+    return dst;
+}
 
-    pwm_counter++;
-    if (pwm_counter >= PWM_PERIOD) {
-        pwm_counter = 0;
-        hue = (hue + 1U) % 360U;
-        hsv_to_rgb(hue, &duty_r, &duty_g, &duty_b);
+/** Write 3-digit zero-padded milliseconds. */
+static char *ms_to_str(char *dst, uint32_t ms)
+{
+    dst[0] = '0' + (char)((ms / 100U) % 10U);
+    dst[1] = '0' + (char)((ms / 10U) % 10U);
+    dst[2] = '0' + (char)(ms % 10U);
+    return dst + 3;
+}
+
+/** Call from main loop — sends uptime every 5 seconds over CDC. */
+void LedPwm_HeartbeatPoll(void)
+{
+    static uint32_t last_tick = 0;
+    uint32_t now = HAL_GetTick();
+
+    if (now - last_tick >= HEARTBEAT_MS) {
+        last_tick = now;
+
+        char buf[32];
+        char *p = buf;
+        *p++ = '[';
+        p = uint_to_str(p, now / 1000U);
+        *p++ = '.';
+        p = ms_to_str(p, now % 1000U);
+        *p++ = ']';
+        *p++ = ' ';
+
+        /* Copy "heartbeat\r\n" */
+        const char *msg = "alive\r\n";
+        while (*msg) { *p++ = *msg++; }
+
+        CDC_Transmit_HS((uint8_t *)buf, (uint16_t)(p - buf));
+
+        /* Brief blue LED pulse to show MCU is alive */
+        HAL_GPIO_WritePin(LED_GPIO_PORT, LED_BLUE_PIN, GPIO_PIN_RESET);
+        HAL_Delay(30);
+        HAL_GPIO_WritePin(LED_GPIO_PORT, LED_BLUE_PIN, GPIO_PIN_SET);
     }
 }

@@ -115,13 +115,13 @@ void PMIC_Init(void)
     /* VBUS input current limit 1.5A */
     pmic_write(0x94, (20U << 3U));
 
-    /* SW2 -> 3.3V: main 3.3V rail for MCU and board peripherals. */
+    /* SW2 (+3V3): HD/MKR connector VCC, JTAG VCC — external use only. */
     pmic_write(0x38, 0x07U);   /* RUN = 3.3V */
     pmic_write(0x39, 0x06U);   /* STANDBY = 3.0V */
     pmic_write(0x3A, 0x06U);   /* SLEEP = 3.0V */
     pmic_write(0x3B, 0x0FU);   /* SW2_CTRL */
 
-    /* SW1 -> 3.3V: VCAP / MCU digital voltage supply. */
+    /* SW1 (+3V1SW): SDRAM, Ethernet LAN8742, USB3320 VDDIO/VDD3.3. */
     pmic_write(0x32, 0x07U);   /* RUN = 3.3V */
     pmic_write(0x33, 0x06U);   /* STANDBY = 3.0V */
     pmic_write(0x34, 0x06U);   /* SLEEP = 3.0V */

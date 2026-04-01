@@ -1,11 +1,17 @@
-# Software PWM Rainbow — TIM6
+# LED Feedback & Serial Heartbeat — TIM6
 
-**Status**: VERIFIED 2026-03-25
+**Status**: VERIFIED 2026-04-01
+
+## Purpose
+
+TIM6 ISR at 10kHz provides timing for a green LED blink on serial RX (~50ms).
+Main loop polls `LedPwm_HeartbeatPoll()` to send `[sec.ms] alive` over CDC
+every 5 seconds with a brief blue LED pulse.
 
 ## Hardware constraint
 
 PK5, PK6, PK7 have no hardware timer PWM alternate function (FMC/LTDC pins only).
-Hardware PWM output is impossible on these pins. Software PWM via timer interrupt is required.
+GPIO toggle via ISR or main loop is the only option.
 
 ## Timer configuration
 
@@ -16,10 +22,8 @@ Hardware PWM output is impossible on these pins. Software PWM via timer interrup
 | PSC             | 2399                                      |
 | ARR             | 9                                         |
 | ISR rate        | 240MHz / 2400 / 10 = 10 kHz              |
-| PWM period      | 100 ISR ticks                             |
-| PWM frequency   | 100 Hz                                    |
-| Hue update rate | once per PWM period = every 10 ms         |
-| Rainbow cycle   | 360 hue steps x 10ms = 3.6 s             |
+| Blink duration  | 500 ISR ticks = 50 ms (green LED on RX)   |
+| Heartbeat       | 5000 ms poll interval (blue LED + CDC TX) |
 | NVIC priority   | 5                                         |
 | IRQ vector      | TIM6_DAC_IRQn (shared with DAC)           |
 
@@ -27,16 +31,14 @@ Hardware PWM output is impossible on these pins. Software PWM via timer interrup
 
 `src/led_pwm.c` / `include/led_pwm.h`
 
-**ISR logic (HAL_TIM_PeriodElapsedCallback)**:
+**LED roles**:
+- Green (PK6): blinks ~50ms on serial packet receive (`LedPwm_BlinkOnRx()`)
+- Blue (PK7): pulses ~30ms every 5s with heartbeat message (`LedPwm_HeartbeatPoll()`)
+- Red (PK5): reserved for error/fault indication
 
-- Software counter 0..99 increments each ISR tick
-- BSRR single-register write drives all three LED pins per tick
-- Active LOW: `counter < duty` -> pin LOW (LED on); else pin HIGH (LED off)
-- Every 100 ticks: advance hue 0..359, recompute R/G/B duty values via HSV->RGB
+**ISR logic (HAL_TIM_PeriodElapsedCallback)**: Counts down blink timer, turns green LED off when done.
 
-**GPIO drive**: Direct `LED_GPIO_PORT->BSRR` write (one register write covers R+G+B).
-
-**HSV->RGB**: Integer math, H=0..359, S=V=100%, output scale 0..100 (matches PWM_PERIOD).
+**Heartbeat (main loop poll)**: Every 5s, formats `[uptime] alive\r\n` using manual integer-to-string (no snprintf — avoids pulling in newlib heap/`_sbrk`), sends via `CDC_Transmit_HS()`, flashes blue LED.
 
 ## HAL modules required
 
@@ -54,16 +56,17 @@ Enable in stm32h7xx_hal_conf.h:
 ## Initialization sequence
 
 ```c
-// In main(), after GPIO_LEDs_Init():
-LedPwm_Init();   // configures TIM6, starts ISR-driven rainbow
+// In main(), after MX_USB_DEVICE_Init():
+LedPwm_Init();   // configures TIM6, starts 10kHz ISR
 
 while (1) {
-    __WFI();     // CPU sleeps; all work happens in TIM6 ISR
+    LedPwm_HeartbeatPoll();  // 5s alive message + blue LED
 }
 ```
 
 ## Gotchas
 
-- **tim_ex required**: `stm32h7xx_hal_tim.c` calls `HAL_TIMEx_BreakCallback` and `HAL_TIMEx_CommutCallback` which are weak symbols in `stm32h7xx_hal_tim_ex.c`. Omitting `tim_ex` causes linker errors even though TIM6 never triggers those callbacks.
-- **TIM6 clock doubling**: APB1 prescaler=2, so TIM6 timer clock = APB1 x 2 = 240MHz, not 120MHz. Use 240MHz in timing calculations.
-- **Shared IRQ vector**: `TIM6_DAC_IRQn` is shared with the DAC peripheral. The handler checks `htim->Instance == TIM6` to guard against spurious calls if DAC is added later.
+- **No snprintf**: Using `snprintf` pulls in newlib heap management (`_sbrk`) which we don't provide. Manual integer formatting avoids this.
+- **tim_ex required**: `stm32h7xx_hal_tim.c` calls `HAL_TIMEx_BreakCallback` and `HAL_TIMEx_CommutCallback` which are weak symbols in `stm32h7xx_hal_tim_ex.c`. Omitting `tim_ex` causes linker errors.
+- **TIM6 clock doubling**: APB1 prescaler=2, so TIM6 timer clock = APB1 x 2 = 240MHz, not 120MHz.
+- **Shared IRQ vector**: `TIM6_DAC_IRQn` is shared with DAC. The handler checks `htim->Instance == TIM6`.

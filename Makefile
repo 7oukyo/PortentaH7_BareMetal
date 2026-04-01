@@ -24,7 +24,9 @@ INC = \
   -Idrivers/CMSIS/Include \
   -Idrivers/CMSIS/Device/ST/STM32H7xx/Include \
   -Idrivers/STM32H7xx_HAL_Driver/Inc \
-  -Idrivers/STM32H7xx_HAL_Driver/Inc/Legacy
+  -Idrivers/STM32H7xx_HAL_Driver/Inc/Legacy \
+  -Imiddlewares/ST/USB_Device_Library/Core/Inc \
+  -Imiddlewares/ST/USB_Device_Library/Class/CDC/Inc
 
 # Application source files
 APP_SRC = \
@@ -33,7 +35,11 @@ APP_SRC = \
   src/led_pwm.c \
   src/system_stm32h7xx.c \
   src/stm32h7xx_it.c \
-  src/stm32h7xx_hal_msp.c
+  src/stm32h7xx_hal_msp.c \
+  src/usb_device.c \
+  src/usbd_conf.c \
+  src/usbd_desc.c \
+  src/usbd_cdc_if.c
 
 # HAL driver source files (only modules enabled in stm32h7xx_hal_conf.h)
 HAL_SRC = \
@@ -54,7 +60,17 @@ HAL_SRC = \
   drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_rcc.c \
   drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_rcc_ex.c \
   drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_tim.c \
-  drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_tim_ex.c
+  drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_tim_ex.c \
+  drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_pcd.c \
+  drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_pcd_ex.c \
+  drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_ll_usb.c
+
+# USB Device Library middleware
+USB_SRC = \
+  middlewares/ST/USB_Device_Library/Core/Src/usbd_core.c \
+  middlewares/ST/USB_Device_Library/Core/Src/usbd_ctlreq.c \
+  middlewares/ST/USB_Device_Library/Core/Src/usbd_ioreq.c \
+  middlewares/ST/USB_Device_Library/Class/CDC/Src/usbd_cdc.c
 
 # Startup assembly
 ASM_SRC = startup/startup_stm32h747xihx.s
@@ -86,7 +102,7 @@ LDFLAGS = $(MCU) \
 # Object file lists (preserve directory structure under build/)
 ##############################################################################
 
-ALL_SRC_C  = $(APP_SRC) $(HAL_SRC)
+ALL_SRC_C  = $(APP_SRC) $(HAL_SRC) $(USB_SRC)
 ALL_OBJ_C  = $(addprefix $(BUILD_DIR)/,$(ALL_SRC_C:.c=.o))
 ALL_OBJ_S  = $(addprefix $(BUILD_DIR)/,$(ASM_SRC:.s=.o))
 ALL_OBJS   = $(ALL_OBJ_C) $(ALL_OBJ_S)

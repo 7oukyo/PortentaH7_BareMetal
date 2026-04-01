@@ -7,6 +7,9 @@
 
 #include "main.h"
 #include "led_pwm.h"
+#include "stm32h7xx_hal.h"
+
+extern PCD_HandleTypeDef hpcd_USB_OTG_HS;
 
 /* NMI: treat as unrecoverable */
 void NMI_Handler(void)
@@ -64,4 +67,10 @@ void SysTick_Handler(void)
 void TIM6_DAC_IRQHandler(void)
 {
     HAL_TIM_IRQHandler(&htim6);
+}
+
+/* USB OTG HS interrupt — delegates to HAL PCD driver. */
+void OTG_HS_IRQHandler(void)
+{
+    HAL_PCD_IRQHandler(&hpcd_USB_OTG_HS);
 }
