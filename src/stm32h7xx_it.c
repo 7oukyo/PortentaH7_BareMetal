@@ -7,6 +7,7 @@
 
 #include "main.h"
 #include "led_pwm.h"
+#include "c4001.h"
 #include "stm32h7xx_hal.h"
 
 extern PCD_HandleTypeDef hpcd_USB_OTG_HS;
@@ -73,4 +74,10 @@ void TIM6_DAC_IRQHandler(void)
 void OTG_HS_IRQHandler(void)
 {
     HAL_PCD_IRQHandler(&hpcd_USB_OTG_HS);
+}
+
+/* UART4 interrupt — C4001 mmWave sensor RX. */
+void UART4_IRQHandler(void)
+{
+    HAL_UART_IRQHandler(&huart4);
 }

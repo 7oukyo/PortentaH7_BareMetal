@@ -60,8 +60,9 @@ Stack is at the end of AXI SRAM per the linker script, not in DTCMRAM.
 9. PJ4 reset toggle + delays (USB3320 PHY reset)
 10. MX_USB_DEVICE_Init() (USB CDC, PLL3 48 MHz clock configured in MSP)
 11. LEDs OFF
-12. LedPwm_Init() (TIM6 10kHz ISR for RX blink timing)
-13. Main loop: LedPwm_HeartbeatPoll() — prints `[sec.ms] alive` every 5s, blue LED pulse
+12. LedPwm_Init() (TIM6 10kHz ISR for green LED RX blink timing)
+13. C4001_Init() (UART4 9600 baud, presence mode, starts sensor)
+14. Main loop: C4001_Poll() — parses sensor data, sends formatted status over CDC on every new frame, red LED = presence
 
 ## OpenOCD Flash
 

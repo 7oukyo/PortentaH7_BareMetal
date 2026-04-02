@@ -4,13 +4,15 @@
  *
  * Init order: PJ0 LOW -> HAL_Init -> I-Cache -> PH1 HIGH (oscillator) ->
  * SystemClock_Config (480 MHz) -> PeriphCommonClock (PLL2) -> GPIO LEDs ->
- * PMIC_Init (I2C1) -> LED PWM rainbow. See docs/current-config.md.
+ * PMIC_Init (I2C1) -> USB CDC -> LED blink -> C4001 mmWave.
+ * See docs/current-config.md.
  */
 
 #include "main.h"
 #include "pmic.h"
 #include "led_pwm.h"
 #include "usb_device.h"
+#include "c4001.h"
 
 static void SystemClock_Config(void);
 static void PeriphCommonClock_Config(void);
@@ -78,12 +80,15 @@ int main(void)
                       LED_RED_PIN | LED_GREEN_PIN | LED_BLUE_PIN,
                       GPIO_PIN_SET);
 
-    /* Start TIM6 software PWM rainbow */
+    /* TIM6 for green LED blink timing on USB RX */
     LedPwm_Init();
+
+    /* C4001 mmWave presence sensor on UART4 (PA0/PI9) */
+    C4001_Init();
 
     while (1)
     {
-        LedPwm_HeartbeatPoll();
+        C4001_Poll();
     }
 }
 

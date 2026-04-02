@@ -20,7 +20,7 @@
 | USB              | VERIFIED    | 2026-04-01 | OTG_HS + USB3320 ULPI, CDC class, echo-back tested |
 | QSPI Flash       | NOT STARTED |            |                                                   |
 | SD Card          | NOT STARTED |            |                                                   |
-| PWM (TIM6/LED)   | VERIFIED    | 2026-04-01 | TIM6 10kHz ISR; RX blink timing + alive pulse      |
+| PWM (TIM6/LED)   | VERIFIED    | 2026-04-01 | TIM6 10kHz ISR; green LED RX blink timing           |
 | ADC              | NOT STARTED |            |                                                   |
 | DAC              | NOT STARTED |            |                                                   |
 | CAN              | NOT STARTED |            |                                                   |
@@ -29,6 +29,6 @@
 
 | Module | Status | Date | Notes |
 |--------|--------|------|-------|
-|        |        |      |       |
+| C4001 mmWave | IN PROGRESS | 2026-04-02 | UART4 (PA0/PI9) 9600 baud, presence mode, CDC output |
 
 Status values: NOT STARTED -> IN PROGRESS -> VERIFIED -> BROKEN (with reason)

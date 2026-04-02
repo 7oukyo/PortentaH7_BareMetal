@@ -47,8 +47,8 @@ HAL_Delay(500);
 | LED   | Function                          | Trigger                     |
 |-------|-----------------------------------|-----------------------------|
 | Green | RX blink (~50ms)                  | `LedPwm_BlinkOnRx()` from CDC receive |
-| Blue  | Alive pulse (~30ms every 5s)      | `LedPwm_HeartbeatPoll()` from main loop |
-| Red   | Unused (available for error/fault) | —                           |
+| Red   | ON while presence detected         | `C4001_Poll()` from main loop |
+| Blue  | Unused / available                 | —                           |
 
 ## Gotchas
 

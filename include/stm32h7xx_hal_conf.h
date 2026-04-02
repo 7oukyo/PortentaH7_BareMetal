@@ -25,6 +25,7 @@ extern "C" {
 #define HAL_HSEM_MODULE_ENABLED
 #define HAL_TIM_MODULE_ENABLED
 #define HAL_PCD_MODULE_ENABLED
+#define HAL_UART_MODULE_ENABLED
 
 /* ########################## Oscillator Values ############################# */
 #if !defined(HSE_VALUE)
@@ -155,6 +156,9 @@ extern "C" {
 #endif
 #ifdef HAL_PCD_MODULE_ENABLED
   #include "stm32h7xx_hal_pcd.h"
+#endif
+#ifdef HAL_UART_MODULE_ENABLED
+  #include "stm32h7xx_hal_uart.h"
 #endif
 
 /* Assert macro */

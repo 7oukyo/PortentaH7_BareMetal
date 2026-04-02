@@ -10,6 +10,7 @@
 
 #include "usbd_cdc_if.h"
 #include "led_pwm.h"
+#include "c4001.h"
 
 /* RX/TX buffers */
 static uint8_t UserRxBufferHS[APP_RX_DATA_SIZE];
@@ -75,13 +76,13 @@ static int8_t CDC_Control_HS(uint8_t cmd, uint8_t *pbuf, uint16_t length)
     return USBD_OK;
 }
 
-/** Bare-metal receive: echo received data back to host, blink green LED. */
+/** Receive from USB host: forward to C4001 sensor as command, blink green LED. */
 static int8_t CDC_Receive_HS(uint8_t *Buf, uint32_t *Len)
 {
     LedPwm_BlinkOnRx();
 
-    /* Echo back what was received */
-    CDC_Transmit_HS(Buf, (uint16_t)*Len);
+    /* Forward received data to C4001 as a command */
+    C4001_HandleSerialCmd((const char *)Buf, (uint16_t)*Len);
 
     /* Re-arm receive for next packet */
     USBD_CDC_SetRxBuffer(&hUsbDeviceHS, Buf);
