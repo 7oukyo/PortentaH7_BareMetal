@@ -1,5 +1,25 @@
 # Hardware Notes
 
+## 2026-04-07 — HAL v1.11.0 → v1.11.6 selective update (RESOLVED)
+
+**Finding**: Bulk-updating all STM32H7xx HAL drivers from v1.11.0 to v1.11.6 caused USB CDC to fail. Systematic per-module bisection identified two independent breaking changes:
+
+**Breaking change 1 — `hal_rcc_ex.h` struct layout shift:**
+The `RCC_PeriphCLKInitTypeDef.PeriphClockSelection` field changed from `uint32_t` to `uint64_t`. This shifts the memory layout of the entire struct by 4 bytes. Even though both header and source agree on the layout, the 64-bit field on Cortex-M7 at `-O0` generates different comparison code for all `RCC_PERIPHCLK_*` bitmask checks, breaking PLL3 configuration for the USB 48 MHz clock.
+
+**Fix**: Patched `hal_rcc_ex.h` to keep `PeriphClockSelection` as `uint32_t`. Removed the upper-32-bit `RCC_PERIPHCLK_PLL2_DIV*` / `RCC_PERIPHCLK_PLL3_DIV*` defines and their source references (we don't use standalone PLL output selections). Stripped `(uint64_t)` casts from all `RCC_PERIPHCLK_*` defines.
+
+**Breaking change 2 — `hal_pcd.c` USB_SetCurrentMode error check:**
+v1.11.6 added `if (USB_SetCurrentMode(...) != HAL_OK) return HAL_ERROR;` in `HAL_PCD_Init`. The mode switch times out with our USB3320 ULPI PHY configuration (50ms timeout in `ll_usb.c`), causing `HAL_PCD_Init` to fail → `Error_Handler`. v1.11.0 silently ignored this with `(void)USB_SetCurrentMode(...)`. Additional behavioral changes in `hal_pcd.c` (battery charging checks, EP abort logic) also appear incompatible with our Full Speed + ULPI setup.
+
+**Fix**: Kept PCD (`hal_pcd.c/h`, `hal_pcd_ex.c/h`) and LL USB (`ll_usb.c/h`) at v1.11.0. These are the only modules not updated.
+
+**Final state**: All HAL modules updated to v1.11.6 EXCEPT PCD/LL_USB (v1.11.0). CMSIS device headers updated to v1.10.7. Two patches applied to `hal_rcc_ex.h/c` for uint64_t revert.
+
+**Lesson**: Never bulk-update HAL drivers. Bisect per-module with USB re-verification. The RCC peripheral clock struct layout and USB PCD init are the two fragile points on this board.
+
+---
+
 ## 2026-03-27 — Cold boot fix: SystemInit full RCC reset (SOLVED)
 
 **Finding**: MCU entered a continuous reset loop on cold boot (power cycle). PINRSTF flag was set

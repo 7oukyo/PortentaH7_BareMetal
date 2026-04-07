@@ -11,7 +11,8 @@
       "Bash(openocd*)",
       "Bash(mkdir*)",
       "Bash(cp*)",
-      "Bash(find /x/Portenta_H7_Stuff/PortentaH7_Claude -name Makefile -o -name *.ld -o -name *.s)"
+      "Bash(find /x/Portenta_H7_Stuff/PortentaH7_Claude -name Makefile -o -name *.ld -o -name *.s)",
+      "WebFetch(domain:raw.githubusercontent.com)"
     ]
   }
 }

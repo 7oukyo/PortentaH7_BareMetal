@@ -21,7 +21,7 @@
 | QSPI Flash       | NOT STARTED |            |                                                   |
 | SD Card          | NOT STARTED |            |                                                   |
 | PWM (TIM6/LED)   | VERIFIED    | 2026-04-01 | TIM6 10kHz ISR; green LED RX blink timing           |
-| ADC              | NOT STARTED |            |                                                   |
+| ADC              | VERIFIED    | 2026-04-06 | ADC1 CH0 (PA0_C), 16-bit, ACS712 current sensor    |
 | DAC              | NOT STARTED |            |                                                   |
 | CAN              | NOT STARTED |            |                                                   |
 
@@ -30,5 +30,6 @@
 | Module | Status | Date | Notes |
 |--------|--------|------|-------|
 | C4001 mmWave | IN PROGRESS | 2026-04-02 | UART4 (PA0/PI9) 9600 baud, presence mode, CDC output |
+| ACS712 5A Current | VERIFIED | 2026-04-06 | ADC1 INP0 (PA0_C / Analog A0), 185 mV/A, bias-calibrated |
 
 Status values: NOT STARTED -> IN PROGRESS -> VERIFIED -> BROKEN (with reason)

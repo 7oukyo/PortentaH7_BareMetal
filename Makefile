@@ -40,7 +40,8 @@ APP_SRC = \
   src/usbd_conf.c \
   src/usbd_desc.c \
   src/usbd_cdc_if.c \
-  src/c4001.c
+  src/c4001.c \
+  src/acs712.c
 
 # HAL driver source files (only modules enabled in stm32h7xx_hal_conf.h)
 HAL_SRC = \
@@ -66,7 +67,9 @@ HAL_SRC = \
   drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_pcd_ex.c \
   drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_uart.c \
   drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_uart_ex.c \
-  drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_ll_usb.c
+  drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_ll_usb.c \
+  drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_adc.c \
+  drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_adc_ex.c
 
 # USB Device Library middleware
 USB_SRC = \

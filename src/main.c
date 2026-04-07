@@ -13,6 +13,7 @@
 #include "led_pwm.h"
 #include "usb_device.h"
 #include "c4001.h"
+#include "acs712.h"
 
 static void SystemClock_Config(void);
 static void PeriphCommonClock_Config(void);
@@ -58,6 +59,9 @@ int main(void)
 
     /* PMIC init via HAL I2C1 — sets SW1/SW2 to 3.3V, configures LDOs */
     PMIC_Init();
+
+    /* ACS712 current sensor — ADC1 CH0 (PA0_C) */
+    ACS712_Init();
 
     /* USB3320 ULPI PHY reset via PJ4: low -> high with delays.
      * Requires SW1 (+3V1SW) and LDO2 (+1V8) from PMIC to be up. */

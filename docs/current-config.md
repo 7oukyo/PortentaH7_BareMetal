@@ -57,12 +57,24 @@ Stack is at the end of AXI SRAM per the linker script, not in DTCMRAM.
 6. PeriphCommonClock_Config() (PLL2 for SPI)
 7. GPIO_LEDs_Init() (PK5/6/7 active LOW)
 8. PMIC_Init() (HAL I2C1, all register writes)
-9. PJ4 reset toggle + delays (USB3320 PHY reset)
-10. MX_USB_DEVICE_Init() (USB CDC, PLL3 48 MHz clock configured in MSP)
-11. LEDs OFF
-12. LedPwm_Init() (TIM6 10kHz ISR for green LED RX blink timing)
-13. C4001_Init() (UART4 9600 baud, presence mode, starts sensor)
-14. Main loop: C4001_Poll() — parses sensor data, sends formatted status over CDC on every new frame, red LED = presence
+9. ACS712_Init() (ADC1 CH0 on PA0_C, 64-sample bias calibration)
+10. PJ4 reset toggle + delays (USB3320 PHY reset)
+11. MX_USB_DEVICE_Init() (USB CDC, PLL3 48 MHz clock configured in MSP)
+12. LEDs OFF
+13. LedPwm_Init() (TIM6 10kHz ISR for green LED RX blink timing)
+14. C4001_Init() (UART4 9600 baud, presence mode, starts sensor)
+15. Main loop: C4001_Poll() — parses sensor data + ACS712 current, sends formatted status over CDC on every new frame, red LED = presence
+
+## ADC (ACS712 Current Sensor)
+
+- **Peripheral**: ADC1, channel INP0 (PA0_C, breakout Analog A0)
+- **Clock**: ADC12 async clock / 6
+- **Resolution**: 16-bit, single-ended
+- **Sampling**: 387.5 cycles (long sample for stable analog input)
+- **VREF+**: 3.3V from PMIC SW3
+- **Calibration**: 64-sample average at startup, bias validated ±450 mV from Vcc/2
+- **SYSCFG_PMCR.PA0SO**: 0 (default) — PA0_C direct to ADC, PA0 free for UART4
+- See [docs/drivers/acs712-current.md](drivers/acs712-current.md) for driver details
 
 ## OpenOCD Flash
 

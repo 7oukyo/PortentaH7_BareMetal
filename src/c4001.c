@@ -12,6 +12,7 @@
  */
 
 #include "c4001.h"
+#include "acs712.h"
 #include "usbd_cdc_if.h"
 #include <string.h>
 
@@ -402,7 +403,7 @@ static void parse_line(const char *line, uint16_t len)
 static void send_report(void)
 {
     uint32_t now = HAL_GetTick();
-    char buf[200];
+    char buf[256];
     char *p = buf;
 
     /* Timestamp: [sec.ms] */
@@ -472,7 +473,25 @@ static void send_report(void)
         const char *lt = " | raw=";
         while (*lt) *p++ = *lt++;
         const char *r = last_raw;
-        while (*r && p < buf + sizeof(buf) - 4) *p++ = *r++;
+        while (*r && p < buf + sizeof(buf) - 40) *p++ = *r++;
+    }
+
+    /* ACS712 current reading */
+    if (ACS712_IsFault()) {
+        const char *ft = " | I=FAULT";
+        while (*ft && p < buf + sizeof(buf) - 4) *p++ = *ft++;
+    } else {
+        const char *it = " | I=";
+        while (*it) *p++ = *it++;
+        float ma = ACS712_ReadCurrent_mA();
+        if (ma < 0.0f) { *p++ = '-'; ma = -ma; }
+        uint32_t ma_int  = (uint32_t)ma;
+        uint32_t ma_frac = (uint32_t)((ma - (float)ma_int) * 10.0f);
+        p = uint_to_str(p, ma_int);
+        *p++ = '.';
+        p = uint_to_str(p, ma_frac);
+        const char *unit = "mA";
+        while (*unit) *p++ = *unit++;
     }
 
     *p++ = '\r';

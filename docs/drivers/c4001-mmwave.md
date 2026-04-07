@@ -176,13 +176,13 @@ A line is printed on every new sensor frame (not polled — real-time).
 
 **Presence mode** (`$DFHPD`):
 ```
-[12.345] DETECTED | frames=42 rx=504B | raw=$DFHPD,1
-[12.678] CLEAR | frames=43 rx=517B | raw=$DFHPD,0
+[12.345] DETECTED | frames=42 rx=504B | raw=$DFHPD,1 | I=523.4mA
+[12.678] CLEAR | frames=43 rx=517B | raw=$DFHPD,0 | I=12.0mA
 ```
 
 **Speed mode** (`$DFDMD`) — adds range, speed, and energy:
 ```
-[12.345] DETECTED | range=2.45m spd=0.50m/s e=450 | frames=11 rx=220B | raw=$DFDMD,1,0,2.45,0.50,450,0,0
+[12.345] DETECTED | range=2.45m spd=0.50m/s e=450 | frames=11 rx=220B | raw=$DFDMD,1,0,2.45,0.50,450,0,0 | I=523.4mA
 ```
 
 Fields:
@@ -193,6 +193,7 @@ Fields:
 - `frames` — total valid sensor frames received since boot
 - `rx` — total bytes received from UART4 (0 = wiring/baud issue)
 - `raw` — last raw sensor line verbatim
+- `I` — ACS712 current reading in mA, or `FAULT` if bias calibration failed (see docs/drivers/acs712-current.md)
 
 Non-data sensor responses (e.g. command acks) are forwarded with `[sensor]` prefix.
 User commands are echoed back with `>` prefix.
