@@ -45,6 +45,7 @@ Key facts repeated here for convenience:
 
 ## Code rules
 
+- **Module independence**: Each peripheral/module source file (`src/*.c`) must be standalone — it must NOT include headers from other project modules. Cross-module calls (e.g., ACS712 readings in a C4001 report) go through `main.c`, which is the only file allowed to include multiple module headers. `usbd_cdc_if.c` calls `HandleSerialCmd()` in main.c for command dispatch; main.c routes to the right module. This keeps modules reusable across different projects.
 - Pure C (C11). No C++ files. File extensions: .c and .h only.
 - Use STM32 HAL for peripheral init. Direct register access acceptable for performance-critical paths but must be commented with register name and RM0399 section number.
 - Every function has a brief comment explaining purpose. No boilerplate filler comments.
@@ -52,7 +53,37 @@ Key facts repeated here for convenience:
 - HAL driver files in drivers/ are never modified. Override behavior via stm32h7xx_hal_msp.c callbacks.
 - Interrupt handlers go in stm32h7xx_it.c, not scattered across files.
 
+## Active Working Memory
+
+- **File**: `docs/latest_memory.md`
+- **Purpose**: Stores current debugging context, root cause analysis, and next steps during active work
+- **When to read**: At the start of each new session or prompt to resume context
+- **When to update**: Continuously as work progresses — every time you make a change or discover something new
+- **When to clean up**: Delete old dated sections (older than current session), dead-end hypotheses, and resolved issues. Keep only what's actionable or load-bearing for the current/next task.
+- **Format**: Markdown with dated sections, status, suspects, and next steps
+- **Why**: Protects against Claude credit exhaustion or session interruption
+
+Treat this file as your scratchpad for the current task. Keep it updated with your latest hypothesis and what you've tried, so the next session picks up where you left off without re-reading chat history. **Ruthlessly delete outdated sections** to keep the file concise and relevant.
+
+## Hardware Feedback via USB VCP Serial
+
+When diagnostics require reading hardware values (ADC samples, calibration results, raw register contents), use the USB VCP serial output (9600 baud) as the feedback channel. The user reads the output and reports back.
+
+- **Standard format preserved**: `docs/vcp-serial-format.md` documents the current C4001 + ACS712 report structure
+- **Read this file before modifying VCP output**: Changing the standard format will break existing data parsers
+- **Diagnostic output convention**: Append on new lines with unique prefix markers like `[ADC_RAW]`, `[ADC_CAL]`, `[I_DIAG]` (see vcp-serial-format.md)
+- **When to use**: Need multiple ADC samples, calibration feedback, or real-time sensor debugging
+
 ## Workflow rules
+
+### Read project docs before any code changes
+
+Before modifying ANY code, read these three documents first:
+- `docs/current-config.md` — init sequence, clock tree, peripheral config, pin assignments
+- `docs/hardware-notes.md` — past bugs, recovery procedures, lessons learned
+- `docs/peripheral-status.md` — what's verified, what's broken, what's in progress
+
+These docs contain hard-won knowledge about fragile init sequences, USB quirks, and hardware wiring. Skipping them risks re-introducing solved bugs or breaking working peripherals.
 
 ### Planning
 

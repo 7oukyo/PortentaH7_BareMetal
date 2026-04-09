@@ -70,6 +70,18 @@ C4001_PresenceData_t C4001_GetPresence(void);
 /** Get latest speed/range data (speed mode only). */
 C4001_SpeedData_t C4001_GetSpeed(void);
 
+/** Returns true once per new parsed frame, then clears. Call from main loop. */
+bool C4001_HasNewFrame(void);
+
+/** Get total valid frames received since boot. */
+uint32_t C4001_GetFrameCount(void);
+
+/** Get total bytes received from sensor since boot. */
+uint32_t C4001_GetRxByteCount(void);
+
+/** Get last raw line from sensor (for debug output). */
+const char *C4001_GetLastRaw(void);
+
 /* ---- Sensor commands ---- */
 
 /** Start sensor data collection. */

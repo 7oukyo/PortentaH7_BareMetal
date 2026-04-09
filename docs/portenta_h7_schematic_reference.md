@@ -18,7 +18,7 @@ This project uses CM7 only.
 | VSS (GND)  | GND           |
 | VDDA       | PMIC SW3 (+3V1) |
 | VSSA       | GND           |
-| VREF+      | AREF+ net (Pulled up from SW1) |
+| VREF+      | AREF+ net (Pulled up from SW3) |
 | VREF-      | GND           |
 | VBAT       | +VBAT from PMIC VSNVS (always-on 3.0V) |
 | VCAP       | Internal LDO regulator  |
@@ -545,16 +545,16 @@ Charge LED DL2 (HSMD-C190): PMIC CHGB output (U10 pin 40), R14 330R. Active low.
 
 ## 19. ADC/Analog Pins (HD J2)
 
-| HD Pin | Signal      | MCU Pin | ADC Channel (**Not verify**) |
-|--------|-------------|---------|----------------------|
-| 73     | ANALOG_A0   | PA0_C   | ADC1/2_INP0 (direct) |
-| 75     | ANALOG_A1   | PA1_C   | ADC1/2_INP1 (direct) |
-| 77     | ANALOG_A2   | PC2_C   | ADC3_INP0 (direct)   |
-| 79     | ANALOG_A3   | PC3_C   | ADC3_INP1 (direct)   |
-| 74     | ANALOG_A4   | PC2     | ADC1/2_INP18 (shared CAM_HS) |
-| 76     | ANALOG_A5   | PC3     | ADC1/2_INP3 (shared CAM_CK) |
-| 78     | ANALOG_A6   | PA4     | ADC1/2_INP12 (shared SPI2) |
-| 80     | ANALOG_A7   | PA6     | ADC1/2_INP13 (shared SPI2) |
+| HD Pin | Signal      | MCU Pin | ADC Channel (verified against DS13356) |
+|--------|-------------|---------|----------------------------------------|
+| 73     | ANALOG_A0   | PA0_C   | ADC1/2_INP0 (direct, SYSCFG PA0SO=0)   |
+| 75     | ANALOG_A1   | PA1_C   | ADC1/2_INP1 (direct, SYSCFG PA1SO=0)   |
+| 77     | ANALOG_A2   | PC2_C   | ADC3_INP0 (direct, SYSCFG PC2SO=0)     |
+| 79     | ANALOG_A3   | PC3_C   | ADC3_INP1 (direct, SYSCFG PC3SO=0)     |
+| 74     | ANALOG_A4   | PC2     | ADC1/2_INP12 (via GPIO, SYSCFG PC2SO=1)|
+| 76     | ANALOG_A5   | PC3     | ADC1/2_INP13 (via GPIO, SYSCFG PC3SO=1)|
+| 78     | ANALOG_A6   | PA4     | ADC1/2_INP18                           |
+| 80     | ANALOG_A7   | PA6     | ADC1/2_INP3                            |
 | 71     | VREF_P      | AREF+   | R34 0R from +3V1SW, C96 2.2uF |
 | 72     | VREF_N      | GND     | n/a         |
 

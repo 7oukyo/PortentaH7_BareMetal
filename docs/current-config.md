@@ -57,13 +57,15 @@ Stack is at the end of AXI SRAM per the linker script, not in DTCMRAM.
 6. PeriphCommonClock_Config() (PLL2 for SPI)
 7. GPIO_LEDs_Init() (PK5/6/7 active LOW)
 8. PMIC_Init() (HAL I2C1, all register writes)
-9. ACS712_Init() (ADC1 CH0 on PA0_C, 64-sample bias calibration)
+9. ACS712_Init() (ADC1 CH0 on PA0_C, 128-sample bias calibration)
 10. PJ4 reset toggle + delays (USB3320 PHY reset)
 11. MX_USB_DEVICE_Init() (USB CDC, PLL3 48 MHz clock configured in MSP)
 12. LEDs OFF
 13. LedPwm_Init() (TIM6 10kHz ISR for green LED RX blink timing)
 14. C4001_Init() (UART4 9600 baud, presence mode, starts sensor)
-15. Main loop: C4001_Poll() — parses sensor data + ACS712 current, sends formatted status over CDC on every new frame, red LED = presence
+15. Motor_Init() (PC15 + PD5 relay GPIOs, both OFF/HIGH)
+16. Motor test auto-starts after 3s delay
+17. Main loop: C4001_Poll() + motor_test_tick(). send_report() on new C4001 frame (C4001 + ACS712 combined). send_motor_status() every 100ms during motor test. Red LED = presence.
 
 ## ADC (ACS712 Current Sensor)
 
@@ -71,10 +73,20 @@ Stack is at the end of AXI SRAM per the linker script, not in DTCMRAM.
 - **Clock**: ADC12 async clock / 6
 - **Resolution**: 16-bit, single-ended
 - **Sampling**: 387.5 cycles (long sample for stable analog input)
-- **VREF+**: 3.3V from PMIC SW3
-- **Calibration**: 64-sample average at startup, bias validated ±450 mV from Vcc/2
+- **VREF+**: 3.1V from PMIC SW3 (measured)
+- **Calibration**: ADC offset calibration + 128-sample average at startup, bias validated ±450 mV from Vcc/2
 - **SYSCFG_PMCR.PA0SO**: 0 (default) — PA0_C direct to ADC, PA0 free for UART4
+- **HAL_ADC_Stop**: Called after every single conversion (STM32H7 requirement)
 - See [docs/drivers/acs712-current.md](drivers/acs712-current.md) for driver details
+
+## Motor Relay H-Bridge
+
+- **Relay 1**: PC15 (breakout GPIO_1) — Motor+ polarity
+- **Relay 2**: PD5 (breakout GPIO_3) — Motor- polarity
+- **Logic**: Active-LOW (pin LOW = relay energized, COM→NO = +29V)
+- **Safety**: Both HIGH = motor stopped. NEVER both LOW. 100ms dead time on direction change.
+- **Motor test**: Cycles STOP→FWD→STOP→REV at startup, 50mA current trip threshold
+- See [docs/drivers/motor-relay.md](drivers/motor-relay.md) for driver details
 
 ## OpenOCD Flash
 

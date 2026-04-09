@@ -21,7 +21,7 @@
 | QSPI Flash       | NOT STARTED |            |                                                   |
 | SD Card          | NOT STARTED |            |                                                   |
 | PWM (TIM6/LED)   | VERIFIED    | 2026-04-01 | TIM6 10kHz ISR; green LED RX blink timing           |
-| ADC              | VERIFIED    | 2026-04-06 | ADC1 CH0 (PA0_C), 16-bit, ACS712 current sensor    |
+| ADC              | VERIFIED    | 2026-04-09 | ADC1 CH0 (PA0_C/ANALOG_A0), 16-bit, ACS712 current sensor |
 | DAC              | NOT STARTED |            |                                                   |
 | CAN              | NOT STARTED |            |                                                   |
 
@@ -29,7 +29,8 @@
 
 | Module | Status | Date | Notes |
 |--------|--------|------|-------|
-| C4001 mmWave | IN PROGRESS | 2026-04-02 | UART4 (PA0/PI9) 9600 baud, presence mode, CDC output |
-| ACS712 5A Current | VERIFIED | 2026-04-06 | ADC1 INP0 (PA0_C / Analog A0), 185 mV/A, bias-calibrated |
+| C4001 mmWave | IN PROGRESS | 2026-04-02 | UART4 (PA0/PI9) 9600 baud, presence mode, CDC output. Decoupled from other modules (2026-04-09). |
+| ACS712 5A Current | IN PROGRESS | 2026-04-09 | PA0_C (ADC1_INP0/ANALOG_A0). Code verified, ADC reads correctly. Pending: user must wire sensor to ANALOG_A0 and verify bias calibration with motor load. PC2/A4 path tested and failed (see driver doc). |
+| Motor Relay H-Bridge | VERIFIED | 2026-04-09 | PC15 + PD5, active-LOW relays, 29V motor. Dead time enforced. Auto-test cycle + current monitoring. Serial output pending verification. |
 
 Status values: NOT STARTED -> IN PROGRESS -> VERIFIED -> BROKEN (with reason)

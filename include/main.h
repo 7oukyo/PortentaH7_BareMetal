@@ -11,4 +11,7 @@
 
 void Error_Handler(void);
 
+/** Process a command received from USB CDC. Dispatches to the right module. */
+void HandleSerialCmd(const char *cmd, uint16_t len);
+
 #endif /* MAIN_H */

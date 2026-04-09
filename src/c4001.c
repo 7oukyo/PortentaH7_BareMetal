@@ -12,7 +12,6 @@
  */
 
 #include "c4001.h"
-#include "acs712.h"
 #include "usbd_cdc_if.h"
 #include <string.h>
 
@@ -40,9 +39,7 @@ static C4001_SpeedData_t    speed_data;
 static uint32_t frame_count  = 0;   /* total valid $DFHPD/$DFDMD frames */
 static uint32_t rx_byte_count = 0;  /* total bytes received from sensor */
 static char last_raw[C4001_RX_BUF_SIZE]; /* last raw line from sensor */
-
-/* Forward declaration */
-static void send_report(void);
+static volatile bool new_frame = false;  /* set by parser, cleared by HasNewFrame */
 
 /* ---- Forward declarations ---- */
 
@@ -165,6 +162,16 @@ C4001_SpeedData_t C4001_GetSpeed(void)
 {
     return speed_data;
 }
+
+bool C4001_HasNewFrame(void)
+{
+    if (new_frame) { new_frame = false; return true; }
+    return false;
+}
+
+uint32_t C4001_GetFrameCount(void)  { return frame_count; }
+uint32_t C4001_GetRxByteCount(void) { return rx_byte_count; }
+const char *C4001_GetLastRaw(void)  { return last_raw; }
 
 /* ---- Sensor commands ---- */
 
@@ -356,7 +363,7 @@ static void parse_line(const char *line, uint16_t len)
         presence_data.present     = (line[7] == '1');
         presence_data.last_update = HAL_GetTick();
         frame_count++;
-        send_report();
+        new_frame = true;
         return;
     }
 
@@ -380,7 +387,7 @@ static void parse_line(const char *line, uint16_t len)
         presence_data.present     = (speed_data.target_count > 0);
         presence_data.last_update = speed_data.last_update;
         frame_count++;
-        send_report();
+        new_frame = true;
         return;
     }
 
@@ -395,113 +402,6 @@ static void parse_line(const char *line, uint16_t len)
     *fp++ = '\r';
     *fp++ = '\n';
     CDC_Transmit_HS((uint8_t *)fwd, (uint16_t)(fp - fwd));
-}
-
-/* ---- Report ---- */
-
-/** Send formatted status over USB CDC. Called on every new sensor frame. */
-static void send_report(void)
-{
-    uint32_t now = HAL_GetTick();
-    char buf[256];
-    char *p = buf;
-
-    /* Timestamp: [sec.ms] */
-    *p++ = '[';
-    p = uint_to_str(p, now / 1000U);
-    *p++ = '.';
-    uint32_t ms = now % 1000U;
-    *p++ = '0' + (char)((ms / 100U) % 10U);
-    *p++ = '0' + (char)((ms / 10U) % 10U);
-    *p++ = '0' + (char)(ms % 10U);
-    *p++ = ']';
-    *p++ = ' ';
-
-    /* Presence status */
-    if (presence_data.present) {
-        const char *s = "DETECTED";
-        while (*s) *p++ = *s++;
-    } else {
-        const char *s = "CLEAR";
-        while (*s) *p++ = *s++;
-    }
-
-    /* Speed mode extra fields: range, speed, energy */
-    if (speed_data.last_update > 0) {
-        const char *rt = " | range=";
-        while (*rt) *p++ = *rt++;
-        /* range_m as fixed-point X.XX */
-        uint32_t r_int = (uint32_t)speed_data.range_m;
-        uint32_t r_frac = (uint32_t)((speed_data.range_m - (float)r_int) * 100.0f);
-        p = uint_to_str(p, r_int);
-        *p++ = '.';
-        if (r_frac < 10) *p++ = '0';
-        p = uint_to_str(p, r_frac);
-        *p++ = 'm';
-
-        const char *st = " spd=";
-        while (*st) *p++ = *st++;
-        float spd = speed_data.speed_mps;
-        if (spd < 0.0f) { *p++ = '-'; spd = -spd; }
-        uint32_t s_int = (uint32_t)spd;
-        uint32_t s_frac = (uint32_t)((spd - (float)s_int) * 100.0f);
-        p = uint_to_str(p, s_int);
-        *p++ = '.';
-        if (s_frac < 10) *p++ = '0';
-        p = uint_to_str(p, s_frac);
-        const char *mps = "m/s";
-        while (*mps) *p++ = *mps++;
-
-        const char *et = " e=";
-        while (*et) *p++ = *et++;
-        p = uint_to_str(p, speed_data.energy);
-    }
-
-    /* Frame count */
-    const char *fc = " | frames=";
-    while (*fc) *p++ = *fc++;
-    p = uint_to_str(p, frame_count);
-
-    /* RX bytes */
-    const char *rb = " rx=";
-    while (*rb) *p++ = *rb++;
-    p = uint_to_str(p, rx_byte_count);
-    *p++ = 'B';
-
-    /* Last raw sensor line */
-    if (last_raw[0] != '\0') {
-        const char *lt = " | raw=";
-        while (*lt) *p++ = *lt++;
-        const char *r = last_raw;
-        while (*r && p < buf + sizeof(buf) - 40) *p++ = *r++;
-    }
-
-    /* ACS712 current reading */
-    if (ACS712_IsFault()) {
-        const char *ft = " | I=FAULT";
-        while (*ft && p < buf + sizeof(buf) - 4) *p++ = *ft++;
-    } else {
-        const char *it = " | I=";
-        while (*it) *p++ = *it++;
-        float ma = ACS712_ReadCurrent_mA();
-        if (ma < 0.0f) { *p++ = '-'; ma = -ma; }
-        uint32_t ma_int  = (uint32_t)ma;
-        uint32_t ma_frac = (uint32_t)((ma - (float)ma_int) * 10.0f);
-        p = uint_to_str(p, ma_int);
-        *p++ = '.';
-        p = uint_to_str(p, ma_frac);
-        const char *unit = "mA";
-        while (*unit) *p++ = *unit++;
-    }
-
-    *p++ = '\r';
-    *p++ = '\n';
-
-    CDC_Transmit_HS((uint8_t *)buf, (uint16_t)(p - buf));
-
-    /* Red LED: ON while presence detected, OFF otherwise (active LOW) */
-    HAL_GPIO_WritePin(LED_GPIO_PORT, LED_RED_PIN,
-                      presence_data.present ? GPIO_PIN_RESET : GPIO_PIN_SET);
 }
 
 /* ---- Internal helpers ---- */

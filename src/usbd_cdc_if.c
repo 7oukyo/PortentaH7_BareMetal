@@ -10,7 +10,7 @@
 
 #include "usbd_cdc_if.h"
 #include "led_pwm.h"
-#include "c4001.h"
+#include "main.h"
 
 /* RX/TX buffers */
 static uint8_t UserRxBufferHS[APP_RX_DATA_SIZE];
@@ -81,8 +81,8 @@ static int8_t CDC_Receive_HS(uint8_t *Buf, uint32_t *Len)
 {
     LedPwm_BlinkOnRx();
 
-    /* Forward received data to C4001 as a command */
-    C4001_HandleSerialCmd((const char *)Buf, (uint16_t)*Len);
+    /* Forward received data to main command dispatcher */
+    HandleSerialCmd((const char *)Buf, (uint16_t)*Len);
 
     /* Re-arm receive for next packet */
     USBD_CDC_SetRxBuffer(&hUsbDeviceHS, Buf);
