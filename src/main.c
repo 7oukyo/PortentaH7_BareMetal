@@ -2,9 +2,15 @@
  * @file main.c
  * @brief Portenta H7 bare-metal entry point (CM7 only).
  *
+ * Automated sofa backplane controller:
+ *   C4001 mmWave detects presence -> motor closes backplane -> INA226 detects
+ *   current spike (contact) -> motor stops -> person leaves -> motor resets.
+ * See docs/sofa-mechanism-flowchart.md for full state machine.
+ *
  * Init order: PJ0 LOW -> HAL_Init -> I-Cache -> PH1 HIGH (oscillator) ->
  * SystemClock_Config (480 MHz) -> PeriphCommonClock (PLL2) -> GPIO LEDs ->
- * PMIC_Init (I2C1) -> USB CDC -> LED blink -> C4001 mmWave.
+ * PMIC_Init (I2C1) -> USB CDC -> LED blink -> C4001 -> Motor relay ->
+ * INA226 (I2C3) -> sofa controller.
  * See docs/current-config.md.
  */
 
@@ -14,7 +20,7 @@
 #include "usb_device.h"
 #include "usbd_cdc_if.h"
 #include "c4001.h"
-#include "acs712.h"
+#include "ina226.h"
 #include "motor_relay.h"
 #include <string.h>
 
@@ -22,21 +28,41 @@ static void SystemClock_Config(void);
 static void PeriphCommonClock_Config(void);
 static void GPIO_LEDs_Init(void);
 static void send_report(void);
-static void send_motor_status(void);
-static void motor_test_tick(void);
+static void sofa_tick(void);
+static void send_sofa_status(void);
 static char *uint_to_str_main(char *dst, uint32_t val);
 
-/* Motor test state machine */
-#define MOTOR_TEST_PERIOD_MS    2000  /* run each direction for 2s */
-#define MOTOR_STOP_PERIOD_MS    1000  /* pause between directions */
-#define MOTOR_REPORT_INTERVAL_MS 100  /* print current every 100ms during test */
-#define MOTOR_CURRENT_THRESHOLD_MA 50.0f  /* emergency stop if current > this */
+/* ---- Sofa auto-adjust state machine ---- */
 
-static uint32_t motor_test_start = 0;
-static uint32_t motor_last_report = 0;
-static uint8_t  motor_test_phase = 0;  /* 0=stop1, 1=fwd, 2=stop2, 3=rev */
-static bool     motor_test_active = false;
-static bool     motor_tripped = false; /* true if current trip stopped motor */
+typedef enum {
+    SOFA_IDLE,      /* No person — backplane fully retracted */
+    SOFA_CLOSING,   /* Person detected — motor driving backplane toward person */
+    SOFA_CONTACT,   /* Current spike detected — backplane touching person's back */
+    SOFA_RESETTING, /* Person left — motor reversing to reset position */
+} SofaState_t;
+
+/* Tunable parameters (adjustable via serial commands) */
+#define SOFA_CLOSE_TIMEOUT_MS    15000  /* max motor-on time when closing */
+#define SOFA_RESET_DURATION_MS   10000  /* reverse time to reach absolute max open */
+#define SOFA_REPORT_INTERVAL_MS  200    /* status print interval */
+#define SOFA_CLEAR_DEBOUNCE_MS   2000   /* presence must be CLEAR this long to reset */
+#define SOFA_DETECT_DEBOUNCE_MS  500    /* presence must be DETECTED this long to close */
+
+static SofaState_t sofa_state = SOFA_IDLE;
+static uint32_t sofa_state_enter_ms = 0;   /* tick when current state was entered */
+static uint32_t sofa_last_report_ms = 0;   /* last status print */
+static uint32_t sofa_clear_since_ms = 0;   /* tick when presence first went CLEAR */
+static uint32_t sofa_detect_since_ms = 0;  /* tick when presence first went DETECTED */
+static bool     sofa_enabled = true;       /* false = manual mode, sofa logic paused */
+static float    sofa_current_threshold_ma = 1000.0f; /* current trip point for contact */
+static bool     sofa_prev_present = false; /* previous presence state for edge detect */
+
+/* Enter a new sofa state */
+static void sofa_enter(SofaState_t new_state)
+{
+    sofa_state = new_state;
+    sofa_state_enter_ms = HAL_GetTick();
+}
 
 int main(void)
 {
@@ -79,9 +105,6 @@ int main(void)
     /* PMIC init via HAL I2C1 — sets SW1/SW2 to 3.3V, configures LDOs */
     PMIC_Init();
 
-    /* ACS712 current sensor — ADC1 CH0 (PA0_C) */
-    ACS712_Init();
-
     /* USB3320 ULPI PHY reset via PJ4: low -> high with delays.
      * Requires SW1 (+3V1SW) and LDO2 (+1V8) from PMIC to be up. */
     GPIO_InitTypeDef gpio_usb = {0};
@@ -112,10 +135,12 @@ int main(void)
     /* Motor relay H-bridge: PC15 (relay 1) + PD5 (relay 2) */
     Motor_Init();
 
-    /* Start motor test sequence after 3s settling */
-    motor_test_start = HAL_GetTick() + 3000;
-    motor_test_active = true;
-    motor_test_phase = 0;
+    /* INA226 current/power monitor on I2C3 (PH7/PH8, breakout I2C_0) */
+    INA226_Init();
+
+    /* Sofa controller starts in IDLE */
+    sofa_enter(SOFA_IDLE);
+    sofa_prev_present = false;
 
     while (1)
     {
@@ -123,8 +148,8 @@ int main(void)
         if (C4001_HasNewFrame()) {
             send_report();
         }
-        if (motor_test_active) {
-            motor_test_tick();
+        if (sofa_enabled) {
+            sofa_tick();
         }
     }
 }
@@ -226,33 +251,88 @@ void HandleSerialCmd(const char *cmd, uint16_t len)
     }
     if (len == 0) return;
 
-    /* ACS712 diagnostics */
-    if (len == 8 && memcmp(cmd, "adc_diag", 8) == 0) {
-        ACS712_PrintRawSamples();
+    /* INA226 diagnostics */
+    if (len == 8 && memcmp(cmd, "ina_diag", 8) == 0) {
+        INA226_PrintDiag();
+        return;
+    }
+    if (len == 8 && memcmp(cmd, "ina_read", 8) == 0) {
+        /* Quick current + voltage readout */
+        char rbuf[80];
+        char *rp = rbuf;
+        const char *rh = "[INA226] I=";
+        while (*rh) *rp++ = *rh++;
+        float ma = INA226_ReadCurrent_mA();
+        if (ma < 0.0f) { *rp++ = '-'; ma = -ma; }
+        rp = uint_to_str_main(rp, (uint32_t)ma);
+        *rp++ = '.';
+        rp = uint_to_str_main(rp, (uint32_t)((ma - (float)(uint32_t)ma) * 10.0f));
+        const char *mu = "mA Vbus=";
+        while (*mu) *rp++ = *mu++;
+        float vb = INA226_ReadBusVoltage_mV();
+        rp = uint_to_str_main(rp, (uint32_t)vb);
+        const char *mv = "mV\r\n";
+        while (*mv) *rp++ = *mv++;
+        CDC_Transmit_HS((uint8_t *)rbuf, (uint16_t)(rp - rbuf));
         return;
     }
 
-    /* Motor commands */
+    /* Motor manual commands (disable sofa mode on manual override) */
     if (len == 9 && memcmp(cmd, "motor_fwd", 9) == 0) {
-        Motor_SetDir(MOTOR_FWD); return;
+        sofa_enabled = false;
+        Motor_SetDir(MOTOR_FWD);
+        return;
     }
     if (len == 9 && memcmp(cmd, "motor_rev", 9) == 0) {
-        Motor_SetDir(MOTOR_REV); return;
-    }
-    if (len == 10 && memcmp(cmd, "motor_stop", 10) == 0) {
-        Motor_EmergencyStop();
-        motor_test_active = false;
+        sofa_enabled = false;
+        Motor_SetDir(MOTOR_REV);
         return;
     }
-    if (len == 10 && memcmp(cmd, "motor_test", 10) == 0) {
-        motor_test_active = true;
-        motor_test_phase = 0;
-        motor_test_start = HAL_GetTick();
-        motor_tripped = false;
+    if (len == 10 && memcmp(cmd, "motor_stop", 10) == 0) {
+        sofa_enabled = false;
+        Motor_EmergencyStop();
         return;
     }
 
-    /* Everything else goes to C4001 sensor */
+    /* Sofa commands */
+    if (len == 10 && memcmp(cmd, "sofa_start", 10) == 0) {
+        sofa_enabled = true;
+        sofa_enter(SOFA_IDLE);
+        Motor_EmergencyStop();
+        sofa_prev_present = false;
+        return;
+    }
+    if (len == 9 && memcmp(cmd, "sofa_stop", 9) == 0) {
+        sofa_enabled = false;
+        Motor_EmergencyStop();
+        return;
+    }
+    if (len == 11 && memcmp(cmd, "sofa_status", 11) == 0) {
+        send_sofa_status();
+        return;
+    }
+
+    /* Sofa threshold adjustment: "sofa_thresh <mA>" */
+    if (len > 13 && memcmp(cmd, "sofa_thresh ", 12) == 0) {
+        uint32_t val = 0;
+        for (uint16_t i = 12; i < len; i++) {
+            if (cmd[i] >= '0' && cmd[i] <= '9')
+                val = val * 10 + (uint32_t)(cmd[i] - '0');
+        }
+        if (val > 0) sofa_current_threshold_ma = (float)val;
+        /* Echo new threshold */
+        char buf[60];
+        char *p = buf;
+        const char *hdr = "[SOFA] threshold=";
+        while (*hdr) *p++ = *hdr++;
+        p = uint_to_str_main(p, val);
+        const char *unit = "mA\r\n";
+        while (*unit) *p++ = *unit++;
+        CDC_Transmit_HS((uint8_t *)buf, (uint16_t)(p - buf));
+        return;
+    }
+
+    /* Everything else goes to C4001 sensor (pass-through for calibration) */
     C4001_HandleSerialCmd(cmd, len);
 }
 
@@ -268,16 +348,9 @@ static char *uint_to_str_main(char *dst, uint32_t val)
     return dst;
 }
 
-/** Send combined C4001 + ACS712 status over USB CDC. */
-static void send_report(void)
+/* Append "[sec.ms] " timestamp to buffer */
+static char *append_timestamp(char *p, uint32_t now)
 {
-    C4001_PresenceData_t pres = C4001_GetPresence();
-    C4001_SpeedData_t spd_data = C4001_GetSpeed();
-    uint32_t now = HAL_GetTick();
-    char buf[256];
-    char *p = buf;
-
-    /* Timestamp: [sec.ms] */
     *p++ = '[';
     p = uint_to_str_main(p, now / 1000U);
     *p++ = '.';
@@ -287,40 +360,63 @@ static void send_report(void)
     *p++ = '0' + (char)(ms % 10U);
     *p++ = ']';
     *p++ = ' ';
+    return p;
+}
+
+/* Append current reading or FAULT to buffer */
+static char *append_current(char *p)
+{
+    if (INA226_IsFault()) {
+        const char *ft = "I=FAULT";
+        while (*ft) *p++ = *ft++;
+    } else {
+        *p++ = 'I'; *p++ = '=';
+        float ma = INA226_ReadCurrent_mA();
+        if (ma < 0.0f) { *p++ = '-'; ma = -ma; }
+        uint32_t ma_int  = (uint32_t)ma;
+        uint32_t ma_frac = (uint32_t)((ma - (float)ma_int) * 10.0f);
+        p = uint_to_str_main(p, ma_int);
+        *p++ = '.';
+        p = uint_to_str_main(p, ma_frac);
+        const char *unit = "mA";
+        while (*unit) *p++ = *unit++;
+    }
+    return p;
+}
+
+/* Append sofa state name to buffer */
+static char *append_sofa_state(char *p)
+{
+    const char *name;
+    switch (sofa_state) {
+    case SOFA_IDLE:      name = "IDLE";      break;
+    case SOFA_CLOSING:   name = "CLOSING";   break;
+    case SOFA_CONTACT:   name = "CONTACT";   break;
+    case SOFA_RESETTING: name = "RESETTING"; break;
+    default:             name = "UNKNOWN";   break;
+    }
+    while (*name) *p++ = *name++;
+    return p;
+}
+
+/** Send combined C4001 + INA226 + sofa status over USB CDC. */
+static void send_report(void)
+{
+    C4001_PresenceData_t pres = C4001_GetPresence();
+    uint32_t now = HAL_GetTick();
+    char buf[256];
+    char *p = buf;
+
+    p = append_timestamp(p, now);
 
     /* Presence status */
     const char *stat = pres.present ? "DETECTED" : "CLEAR";
     while (*stat) *p++ = *stat++;
 
-    /* Speed mode extra fields */
-    if (spd_data.last_update > 0) {
-        const char *rt = " | range=";
-        while (*rt) *p++ = *rt++;
-        uint32_t r_int = (uint32_t)spd_data.range_m;
-        uint32_t r_frac = (uint32_t)((spd_data.range_m - (float)r_int) * 100.0f);
-        p = uint_to_str_main(p, r_int);
-        *p++ = '.';
-        if (r_frac < 10) *p++ = '0';
-        p = uint_to_str_main(p, r_frac);
-        *p++ = 'm';
-
-        const char *st = " spd=";
-        while (*st) *p++ = *st++;
-        float spd = spd_data.speed_mps;
-        if (spd < 0.0f) { *p++ = '-'; spd = -spd; }
-        uint32_t s_int = (uint32_t)spd;
-        uint32_t s_frac = (uint32_t)((spd - (float)s_int) * 100.0f);
-        p = uint_to_str_main(p, s_int);
-        *p++ = '.';
-        if (s_frac < 10) *p++ = '0';
-        p = uint_to_str_main(p, s_frac);
-        const char *mps = "m/s";
-        while (*mps) *p++ = *mps++;
-
-        const char *et = " e=";
-        while (*et) *p++ = *et++;
-        p = uint_to_str_main(p, spd_data.energy);
-    }
+    /* Sofa state */
+    const char *sf = " | sofa=";
+    while (*sf) *p++ = *sf++;
+    p = append_sofa_state(p);
 
     /* Frame count + RX bytes */
     const char *fc = " | frames=";
@@ -336,27 +432,14 @@ static void send_report(void)
     const char *raw = C4001_GetLastRaw();
     if (raw[0] != '\0') {
         const char *lt = " | raw=";
-        while (*lt) *p++ = *lt++;
-        while (*raw && p < buf + sizeof(buf) - 40) *p++ = *raw++;
+        while (*lt && p < buf + sizeof(buf) - 40) *p++ = *lt++;
+        while (*raw && p < buf + sizeof(buf) - 30) *p++ = *raw++;
     }
 
-    /* ACS712 current reading */
-    if (ACS712_IsFault()) {
-        const char *ft = " | I=FAULT";
-        while (*ft && p < buf + sizeof(buf) - 4) *p++ = *ft++;
-    } else {
-        const char *it = " | I=";
-        while (*it) *p++ = *it++;
-        float ma = ACS712_ReadCurrent_mA();
-        if (ma < 0.0f) { *p++ = '-'; ma = -ma; }
-        uint32_t ma_int  = (uint32_t)ma;
-        uint32_t ma_frac = (uint32_t)((ma - (float)ma_int) * 10.0f);
-        p = uint_to_str_main(p, ma_int);
-        *p++ = '.';
-        p = uint_to_str_main(p, ma_frac);
-        const char *unit = "mA";
-        while (*unit) *p++ = *unit++;
-    }
+    /* INA226 current reading */
+    const char *sep = " | ";
+    while (*sep) *p++ = *sep++;
+    p = append_current(p);
 
     *p++ = '\r';
     *p++ = '\n';
@@ -367,112 +450,143 @@ static void send_report(void)
                       pres.present ? GPIO_PIN_RESET : GPIO_PIN_SET);
 }
 
-/* ---- Motor test state machine ---- */
+/* ---- Sofa status output ---- */
 
-static void send_motor_status(void)
+static void send_sofa_status(void)
 {
+    uint32_t now = HAL_GetTick();
     char buf[120];
     char *p = buf;
-    uint32_t now = HAL_GetTick();
 
-    *p++ = '[';
-    p = uint_to_str_main(p, now / 1000U);
-    *p++ = '.';
-    uint32_t ms = now % 1000U;
-    *p++ = '0' + (char)((ms / 100U) % 10U);
-    *p++ = '0' + (char)((ms / 10U) % 10U);
-    *p++ = '0' + (char)(ms % 10U);
-    *p++ = ']';
-    *p++ = ' ';
+    p = append_timestamp(p, now);
 
-    const char *dir_str;
+    const char *hdr = "SOFA=";
+    while (*hdr) *p++ = *hdr++;
+    p = append_sofa_state(p);
+
+    /* Motor direction */
     MotorDir_t dir = Motor_GetDir();
-    if (dir == MOTOR_FWD) dir_str = "MOTOR=FWD";
-    else if (dir == MOTOR_REV) dir_str = "MOTOR=REV";
-    else dir_str = "MOTOR=STOP";
-    while (*dir_str) *p++ = *dir_str++;
+    const char *dstr;
+    if (dir == MOTOR_FWD) dstr = " MTR=FWD";
+    else if (dir == MOTOR_REV) dstr = " MTR=REV";
+    else dstr = " MTR=STOP";
+    while (*dstr) *p++ = *dstr++;
 
-    /* Current reading */
-    if (ACS712_IsFault()) {
-        const char *ft = " I=FAULT";
-        while (*ft) *p++ = *ft++;
-    } else {
-        const char *it = " I=";
-        while (*it) *p++ = *it++;
-        float ma = ACS712_ReadCurrent_mA();
-        if (ma < 0.0f) { *p++ = '-'; ma = -ma; }
-        uint32_t ma_int  = (uint32_t)ma;
-        uint32_t ma_frac = (uint32_t)((ma - (float)ma_int) * 10.0f);
-        p = uint_to_str_main(p, ma_int);
-        *p++ = '.';
-        p = uint_to_str_main(p, ma_frac);
-        const char *unit = "mA";
-        while (*unit) *p++ = *unit++;
-    }
+    /* Time in state */
+    const char *tis = " t=";
+    while (*tis) *p++ = *tis++;
+    uint32_t elapsed = now - sofa_state_enter_ms;
+    p = uint_to_str_main(p, elapsed / 1000U);
+    *p++ = '.';
+    p = uint_to_str_main(p, (elapsed % 1000U) / 100U);
+    *p++ = 's';
 
-    if (motor_tripped) {
-        const char *trip = " TRIPPED";
-        while (*trip) *p++ = *trip++;
-    }
+    /* Current */
+    *p++ = ' ';
+    p = append_current(p);
+
+    /* Presence */
+    C4001_PresenceData_t pres = C4001_GetPresence();
+    const char *pr = pres.present ? " PRS=1" : " PRS=0";
+    while (*pr) *p++ = *pr++;
 
     *p++ = '\r'; *p++ = '\n';
     CDC_Transmit_HS((uint8_t *)buf, (uint16_t)(p - buf));
 }
 
-static void motor_test_tick(void)
+/* ---- Sofa auto-adjust state machine ---- */
+
+static void sofa_tick(void)
 {
     uint32_t now = HAL_GetTick();
-    uint32_t elapsed = now - motor_test_start;
+    uint32_t elapsed = now - sofa_state_enter_ms;
+    C4001_PresenceData_t pres = C4001_GetPresence();
+    bool present = pres.present;
 
-    /* Current monitoring: emergency stop if threshold exceeded */
-    if (Motor_GetDir() != MOTOR_STOP && !ACS712_IsFault()) {
-        float ma = ACS712_ReadCurrent_mA();
-        if (ma > MOTOR_CURRENT_THRESHOLD_MA || ma < -MOTOR_CURRENT_THRESHOLD_MA) {
-            Motor_EmergencyStop();
-            motor_test_active = false;
-            motor_tripped = true;
-            send_motor_status();
-            return;
-        }
+    /* Track debounce edges */
+    if (present && !sofa_prev_present) {
+        sofa_detect_since_ms = now;  /* rising edge */
+    }
+    if (!present && sofa_prev_present) {
+        sofa_clear_since_ms = now;   /* falling edge */
+    }
+    sofa_prev_present = present;
+
+    /* Periodic status output */
+    if (now - sofa_last_report_ms >= SOFA_REPORT_INTERVAL_MS) {
+        sofa_last_report_ms = now;
+        send_sofa_status();
     }
 
-    /* High-frequency motor status reports */
-    if (now - motor_last_report >= MOTOR_REPORT_INTERVAL_MS) {
-        motor_last_report = now;
-        send_motor_status();
-    }
+    switch (sofa_state) {
 
-    /* Phase transitions */
-    switch (motor_test_phase) {
-    case 0: /* Initial stop */
-        if (elapsed >= MOTOR_STOP_PERIOD_MS) {
+    case SOFA_IDLE:
+        /* Wait for person detection (debounced) */
+        if (present && (now - sofa_detect_since_ms >= SOFA_DETECT_DEBOUNCE_MS)) {
             Motor_SetDir(MOTOR_FWD);
-            motor_test_start = now;
-            motor_test_phase = 1;
+            sofa_enter(SOFA_CLOSING);
         }
         break;
-    case 1: /* Forward */
-        if (elapsed >= MOTOR_TEST_PERIOD_MS) {
-            Motor_SetDir(MOTOR_STOP);
-            motor_test_start = now;
-            motor_test_phase = 2;
+
+    case SOFA_CLOSING:
+        /* Motor is driving backplane toward person */
+
+        /* Check current spike (person's back contact) */
+        if (!INA226_IsFault()) {
+            float ma = INA226_ReadCurrent_mA();
+            if (ma < 0.0f) ma = -ma;  /* absolute value */
+            if (ma > sofa_current_threshold_ma) {
+                Motor_EmergencyStop();
+                sofa_enter(SOFA_CONTACT);
+                break;
+            }
         }
-        break;
-    case 2: /* Stop between directions */
-        if (elapsed >= MOTOR_STOP_PERIOD_MS) {
+
+        /* Safety timeout — stop even without current feedback */
+        if (elapsed >= SOFA_CLOSE_TIMEOUT_MS) {
+            Motor_EmergencyStop();
+            sofa_enter(SOFA_CONTACT);
+        }
+
+        /* If person leaves during closing, abort and reset */
+        if (!present && (now - sofa_clear_since_ms >= SOFA_CLEAR_DEBOUNCE_MS)) {
             Motor_SetDir(MOTOR_REV);
-            motor_test_start = now;
-            motor_test_phase = 3;
+            sofa_enter(SOFA_RESETTING);
         }
         break;
-    case 3: /* Reverse */
-        if (elapsed >= MOTOR_TEST_PERIOD_MS) {
-            Motor_SetDir(MOTOR_STOP);
-            motor_test_start = now;
-            motor_test_phase = 0; /* loop */
+
+    case SOFA_CONTACT:
+        /* Backplane touching person — hold position, motor off */
+
+        /* When person leaves, start reset */
+        if (!present && (now - sofa_clear_since_ms >= SOFA_CLEAR_DEBOUNCE_MS)) {
+            Motor_SetDir(MOTOR_REV);
+            sofa_enter(SOFA_RESETTING);
+        }
+        break;
+
+    case SOFA_RESETTING:
+        /* Motor reversing to fully retracted position */
+
+        /* After reset duration, stop and go idle */
+        if (elapsed >= SOFA_RESET_DURATION_MS) {
+            Motor_EmergencyStop();
+            sofa_enter(SOFA_IDLE);
+        }
+
+        /* If person sits back down during reset, stop and re-close */
+        if (present && (now - sofa_detect_since_ms >= SOFA_DETECT_DEBOUNCE_MS)) {
+            Motor_EmergencyStop();
+            HAL_Delay(MOTOR_DEADTIME_MS);
+            Motor_SetDir(MOTOR_FWD);
+            sofa_enter(SOFA_CLOSING);
         }
         break;
     }
+
+    /* Blue LED: ON during motor activity (active LOW) */
+    HAL_GPIO_WritePin(LED_GPIO_PORT, LED_BLUE_PIN,
+                      Motor_GetDir() != MOTOR_STOP ? GPIO_PIN_RESET : GPIO_PIN_SET);
 }
 
 /**

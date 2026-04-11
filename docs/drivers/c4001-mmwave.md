@@ -193,7 +193,7 @@ Fields:
 - `frames` — total valid sensor frames received since boot
 - `rx` — total bytes received from UART4 (0 = wiring/baud issue)
 - `raw` — last raw sensor line verbatim
-- `I` — ACS712 current reading in mA, or `FAULT` if bias calibration failed (see docs/drivers/acs712-current.md)
+- `I` — INA226 current reading in mA, or `FAULT` if I2C error (see docs/drivers/ina226-current.md)
 
 Non-data sensor responses (e.g. command acks) are forwarded with `[sensor]` prefix.
 User commands are echoed back with `>` prefix.

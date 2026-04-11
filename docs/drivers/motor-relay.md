@@ -13,7 +13,7 @@
 
 - **Relay type**: Active-LOW relay modules
 - **Motor supply**: 29V through relay NO contacts
-- **Current sensing**: ACS712-05B in series with motor (see `docs/drivers/acs712-current.md`)
+- **Current sensing**: INA226 on I2C3 monitors motor current (see `docs/drivers/ina226-current.md`)
 
 ## Operation
 
@@ -29,7 +29,7 @@
 - **Dead time**: 100ms enforced between direction changes (FWD to REV or REV to FWD)
 - **Direction change**: Always goes through STOP first (both relays OFF), then waits dead time, then sets new direction
 - **Emergency stop**: `Motor_EmergencyStop()` — both relays OFF immediately, no dead time wait
-- **Current trip**: Motor test monitors ACS712 current, emergency stops if > 50mA threshold
+- **Current trip**: Sofa controller monitors INA226 current, emergency stops if above threshold (default 1000 mA, adjustable via `sofa_thresh`)
 
 ## Initialization
 

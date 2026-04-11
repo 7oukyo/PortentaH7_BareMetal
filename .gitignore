@@ -5,3 +5,8 @@ reference/DFRobot_C4001-master
 null
 nul
 .markdownlint.json
+mempal_save_hook.sh
+mempal_precompact_hook.sh
+mempalace.yaml
+entities.json
+CubeMX_Output

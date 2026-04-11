@@ -41,7 +41,7 @@ APP_SRC = \
   src/usbd_desc.c \
   src/usbd_cdc_if.c \
   src/c4001.c \
-  src/acs712.c \
+  src/ina226.c \
   src/motor_relay.c
 
 # HAL driver source files (only modules enabled in stm32h7xx_hal_conf.h)

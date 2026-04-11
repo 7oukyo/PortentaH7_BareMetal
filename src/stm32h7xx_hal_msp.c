@@ -47,6 +47,30 @@ void HAL_I2C_MspInit(I2C_HandleTypeDef *hi2c)
 
         __HAL_RCC_I2C1_CLK_ENABLE();
     }
+    else if (hi2c->Instance == I2C3) {
+        /* I2C3 kernel clock = D2PCLK1 (120 MHz), same source as I2C1.
+         * Note: I2c123ClockSelection covers I2C1/2/3 together. Setting it
+         * here is harmless if I2C1 already set it — same value. */
+        RCC_PeriphCLKInitTypeDef clk = {0};
+        clk.PeriphClockSelection = RCC_PERIPHCLK_I2C3;
+        clk.I2c123ClockSelection = RCC_I2C123CLKSOURCE_D2PCLK1;
+        if (HAL_RCCEx_PeriphCLKConfig(&clk) != HAL_OK) {
+            Error_Handler();
+        }
+
+        __HAL_RCC_GPIOH_CLK_ENABLE();
+
+        /* PH7=SCL, PH8=SDA: AF4 (I2C3), open-drain. Breakout I2C_0. */
+        GPIO_InitTypeDef gpio = {0};
+        gpio.Pin       = GPIO_PIN_7 | GPIO_PIN_8;
+        gpio.Mode      = GPIO_MODE_AF_OD;
+        gpio.Pull      = GPIO_NOPULL;
+        gpio.Speed     = GPIO_SPEED_FREQ_VERY_HIGH;
+        gpio.Alternate = GPIO_AF4_I2C3;
+        HAL_GPIO_Init(GPIOH, &gpio);
+
+        __HAL_RCC_I2C3_CLK_ENABLE();
+    }
 }
 
 void HAL_I2C_MspDeInit(I2C_HandleTypeDef *hi2c)
@@ -55,6 +79,11 @@ void HAL_I2C_MspDeInit(I2C_HandleTypeDef *hi2c)
         __HAL_RCC_I2C1_CLK_DISABLE();
         HAL_GPIO_DeInit(GPIOB, GPIO_PIN_6);
         HAL_GPIO_DeInit(GPIOB, GPIO_PIN_7);
+    }
+    else if (hi2c->Instance == I2C3) {
+        __HAL_RCC_I2C3_CLK_DISABLE();
+        HAL_GPIO_DeInit(GPIOH, GPIO_PIN_7);
+        HAL_GPIO_DeInit(GPIOH, GPIO_PIN_8);
     }
 }
 

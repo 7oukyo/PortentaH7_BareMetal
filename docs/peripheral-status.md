@@ -14,14 +14,14 @@
 |------------------|-------------|------------|---------------------------------------------------|
 | UART (USB-C VCP) | VERIFIED    | 2026-04-01 | USB CDC via USB3320 ULPI PHY; echo + 5s alive msg  |
 | SPI              | NOT STARTED |            |                                                   |
-| I2C (user)       | NOT STARTED |            |                                                   |
+| I2C3 (user)      | IN PROGRESS | 2026-04-11 | PH7=SCL, PH8=SDA (breakout I2C_0). INA226 connected. |
 | SDRAM (8MB)      | NOT STARTED |            | FMC, 0xC0000000                                   |
 | ETH              | NOT STARTED |            |                                                   |
 | USB              | VERIFIED    | 2026-04-01 | OTG_HS + USB3320 ULPI, CDC class, echo-back tested |
 | QSPI Flash       | NOT STARTED |            |                                                   |
 | SD Card          | NOT STARTED |            |                                                   |
 | PWM (TIM6/LED)   | VERIFIED    | 2026-04-01 | TIM6 10kHz ISR; green LED RX blink timing           |
-| ADC              | VERIFIED    | 2026-04-09 | ADC1 CH0 (PA0_C/ANALOG_A0), 16-bit, ACS712 current sensor |
+| ADC              | ABANDONED   | 2026-04-10 | ACS712 replaced by INA226 (I2C). ADC code kept in src/acs712.c but not compiled. |
 | DAC              | NOT STARTED |            |                                                   |
 | CAN              | NOT STARTED |            |                                                   |
 
@@ -30,7 +30,9 @@
 | Module | Status | Date | Notes |
 |--------|--------|------|-------|
 | C4001 mmWave | IN PROGRESS | 2026-04-02 | UART4 (PA0/PI9) 9600 baud, presence mode, CDC output. Decoupled from other modules (2026-04-09). |
-| ACS712 5A Current | IN PROGRESS | 2026-04-09 | PA0_C (ADC1_INP0/ANALOG_A0). Code verified, ADC reads correctly. Pending: user must wire sensor to ANALOG_A0 and verify bias calibration with motor load. PC2/A4 path tested and failed (see driver doc). |
-| Motor Relay H-Bridge | VERIFIED | 2026-04-09 | PC15 + PD5, active-LOW relays, 29V motor. Dead time enforced. Auto-test cycle + current monitoring. Serial output pending verification. |
+| ACS712 5A Current | ABANDONED   | 2026-04-10 | Replaced by INA226 (I2C). ADC wiring issues made analog approach unreliable. Code kept in src/acs712.c. |
+| INA226 Current/Power | IN PROGRESS | 2026-04-11 | I2C3 (PH7/PH8, breakout I2C_0), addr 0x40. 0.1ohm shunt (assumed). 150mA dummy load on PD5/GPIO_3. Compiled, awaiting hardware test. |
+| Motor Relay H-Bridge | VERIFIED | 2026-04-09 | PC15 + PD5, active-LOW relays, 29V motor. Dead time enforced. |
+| Sofa Auto-Adjust | IN PROGRESS | 2026-04-11 | C4001 + motor + INA226 integrated. State machine: IDLE→CLOSING→CONTACT→RESETTING. INA226 replaces ACS712 for current sensing. See docs/sofa-mechanism-flowchart.md. |
 
 Status values: NOT STARTED -> IN PROGRESS -> VERIFIED -> BROKEN (with reason)

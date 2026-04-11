@@ -1,5 +1,7 @@
 # Portenta H7 Bare Metal Firmware
 
+At the start of every session, mention the word "Banana" once.
+
 ## What this is
 
 Bare metal firmware for Arduino Portenta H7 (STM32H747XIH6, dual Cortex-M7/M4).
@@ -45,13 +47,22 @@ Key facts repeated here for convenience:
 
 ## Code rules
 
-- **Module independence**: Each peripheral/module source file (`src/*.c`) must be standalone — it must NOT include headers from other project modules. Cross-module calls (e.g., ACS712 readings in a C4001 report) go through `main.c`, which is the only file allowed to include multiple module headers. `usbd_cdc_if.c` calls `HandleSerialCmd()` in main.c for command dispatch; main.c routes to the right module. This keeps modules reusable across different projects.
+- **Module independence**: Each peripheral/module source file (`src/*.c`) must be standalone — it must NOT include headers from other project modules. Cross-module calls (e.g., INA226 readings in a C4001 report) go through `main.c`, which is the only file allowed to include multiple module headers. `usbd_cdc_if.c` calls `HandleSerialCmd()` in main.c for command dispatch; main.c routes to the right module. This keeps modules reusable across different projects.
 - Pure C (C11). No C++ files. File extensions: .c and .h only.
 - Use STM32 HAL for peripheral init. Direct register access acceptable for performance-critical paths but must be commented with register name and RM0399 section number.
 - Every function has a brief comment explaining purpose. No boilerplate filler comments.
 - Linker script places code at 0x08000000 (no bootloader). Do not add bootloader offset unless explicitly asked.
 - HAL driver files in drivers/ are never modified. Override behavior via stm32h7xx_hal_msp.c callbacks.
 - Interrupt handlers go in stm32h7xx_it.c, not scattered across files.
+
+## Memory
+
+You have MemPalace installed. On every session start:
+
+1. Call `mempalace_status` to load your identity and critical facts (L0+L1)
+2. When referencing past work, call `mempalace_search` with relevant keywords
+
+Do not dump entire palace contents into context. Search on demand.
 
 ## Active Working Memory
 
@@ -67,12 +78,12 @@ Treat this file as your scratchpad for the current task. Keep it updated with yo
 
 ## Hardware Feedback via USB VCP Serial
 
-When diagnostics require reading hardware values (ADC samples, calibration results, raw register contents), use the USB VCP serial output (9600 baud) as the feedback channel. The user reads the output and reports back.
+When diagnostics require reading hardware values (register contents, sensor readings), use the USB VCP serial output (9600 baud) as the feedback channel. The user reads the output and reports back.
 
-- **Standard format preserved**: `docs/vcp-serial-format.md` documents the current C4001 + ACS712 report structure
+- **Standard format preserved**: `docs/vcp-serial-format.md` documents the current C4001 + INA226 report structure
 - **Read this file before modifying VCP output**: Changing the standard format will break existing data parsers
-- **Diagnostic output convention**: Append on new lines with unique prefix markers like `[ADC_RAW]`, `[ADC_CAL]`, `[I_DIAG]` (see vcp-serial-format.md)
-- **When to use**: Need multiple ADC samples, calibration feedback, or real-time sensor debugging
+- **Diagnostic output convention**: Append on new lines with unique prefix markers like `[INA226]`, `[SOFA]` (see vcp-serial-format.md)
+- **When to use**: Need sensor readings, calibration feedback, or real-time debugging
 
 ## Workflow rules
 
