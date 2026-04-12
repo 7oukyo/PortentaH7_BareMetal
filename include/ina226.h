@@ -4,7 +4,7 @@
  *
  * Connected on I2C3 (PH7=SCL, PH8=SDA) via breakout I2C_0.
  * 7-bit address 0x40 (A0=GND, A1=GND).
- * Shunt resistor: configurable via INA226_SHUNT_OHM (default 0.1 ohm).
+ * Shunt resistor: configurable via INA226_SHUNT_OHM (currently 10 mohm, max ~8.2A).
  */
 
 #ifndef INA226_H
@@ -18,8 +18,14 @@
 /* 7-bit I2C address (A0=GND, A1=GND = 0b1000000) */
 #define INA226_I2C_ADDR         0x40U
 
-/* Shunt resistor value in ohms. Change if your module differs. */
-#define INA226_SHUNT_OHM        0.1f
+/* Shunt resistor value in ohms (effective, includes clone chip correction).
+ * Physical shunt is 10mohm (0.01), confirmed by multimeter: 10mV at 1A.
+ * This chip is a FAKE INA226 — Vsh ADC LSB is 1.0uV, not TI's 2.5uV.
+ * (MFR_ID/DIE_ID are spoofed to match genuine TI: 0x5449/0x2260.)
+ * Exactly 2.5x more counts per volt → multiply physical Rsh by 2.5.
+ * Effective shunt = 0.01 * 2.5 = 0.025 compensates the 2.5x ADC overread.
+ * Verified: CAL=2048 gives 1009mA with 1A reference load (2026-04-12). */
+#define INA226_SHUNT_OHM        0.025f
 
 /* Maximum expected current in amps (for calibration register). */
 #define INA226_MAX_CURRENT_A    3.2768f
@@ -27,7 +33,7 @@
 /* ---- INA226 register addresses ---- */
 
 #define INA226_REG_CONFIG       0x00U
-#define INA226_REG_SHUNT_V      0x01U   /* Shunt voltage (2.5 uV/bit, signed) */
+#define INA226_REG_SHUNT_V      0x01U   /* Shunt voltage (1.0 uV/bit on this clone, signed) */
 #define INA226_REG_BUS_V        0x02U   /* Bus voltage (1.25 mV/bit, unsigned) */
 #define INA226_REG_POWER        0x03U   /* Power (25x current LSB * bus V) */
 #define INA226_REG_CURRENT      0x04U   /* Current (signed, LSB from calibration) */
@@ -104,5 +110,8 @@ bool INA226_IsFault(void);
 
 /** Print all registers and computed values over USB VCP. */
 void INA226_PrintDiag(void);
+
+/** Comprehensive self-test: register dump, cross-check chip math, test fix. */
+void INA226_SelfTest(void);
 
 #endif /* INA226_H */

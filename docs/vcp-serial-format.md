@@ -62,6 +62,7 @@ Every 200ms when sofa mode is enabled, `send_sofa_status()` outputs:
 | `motor_stop` | Emergency stop (disables sofa mode) |
 | `ina_diag` | Print INA226 config/cal registers + measurements |
 | `ina_read` | Quick current + bus voltage readout |
+| `ina_test` | Comprehensive self-test: register dump, cross-check, CAL test, verdict |
 
 ## Diagnostic Output Convention
 

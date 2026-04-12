@@ -73,10 +73,10 @@ Stack is at the end of AXI SRAM per the linker script, not in DTCMRAM.
 - **Address**: 0x40 (A0=GND, A1=GND)
 - **I2C timing**: 0x307075B1 (120 MHz D2PCLK1, ~400 kHz), same as PMIC I2C1
 - **Config**: 64x averaging, 1.1ms conversion, continuous shunt+bus mode
-- **Shunt**: 0.1 ohm (assumed — configurable via INA226_SHUNT_OHM)
-- **Calibration**: Cal=512, Current LSB = 0.1 mA, Power LSB = 2.5 mW
+- **Shunt**: 10 mohm physical. Effective INA226_SHUNT_OHM = 0.025 (compensates clone 2.5x Vsh overread)
+- **Calibration**: Cal=2048, Current LSB = 0.1 mA, Power LSB = 2.5 mW
+- **Clone chip**: Vsh ADC LSB ~1.0 uV (not TI's 2.5 uV). MFR/DIE IDs spoofed (0x5449/0x2260).
 - **Application**: Motor current sensing for sofa backplane auto-adjust. VBUS = 29V motor supply.
-- **Manufacturer ID**: 0x5449 ("TI"), Die ID: 0x2260 — checked at init
 - See [docs/drivers/ina226-current.md](drivers/ina226-current.md) for driver details
 
 ## Motor Relay H-Bridge

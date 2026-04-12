@@ -31,7 +31,7 @@
 |--------|--------|------|-------|
 | C4001 mmWave | IN PROGRESS | 2026-04-02 | UART4 (PA0/PI9) 9600 baud, presence mode, CDC output. Decoupled from other modules (2026-04-09). |
 | ACS712 5A Current | ABANDONED   | 2026-04-10 | Replaced by INA226 (I2C). ADC wiring issues made analog approach unreliable. Code kept in src/acs712.c. |
-| INA226 Current/Power | IN PROGRESS | 2026-04-11 | I2C3 (PH7/PH8, breakout I2C_0), addr 0x40. 0.1ohm shunt (assumed). 150mA dummy load on PD5/GPIO_3. Compiled, awaiting hardware test. |
+| INA226 Current/Power | VERIFIED | 2026-04-12 | I2C3 (PH7/PH8, breakout I2C_0), addr 0x40. Clone chip: Vsh LSB ~1.0uV (not 2.5uV). 10mohm shunt, effective Rsh=0.025 compensates. CAL=2048. Verified 1009mA with 1A ref load. |
 | Motor Relay H-Bridge | VERIFIED | 2026-04-09 | PC15 + PD5, active-LOW relays, 29V motor. Dead time enforced. |
 | Sofa Auto-Adjust | IN PROGRESS | 2026-04-11 | C4001 + motor + INA226 integrated. State machine: IDLE→CLOSING→CONTACT→RESETTING. INA226 replaces ACS712 for current sensing. See docs/sofa-mechanism-flowchart.md. |
 

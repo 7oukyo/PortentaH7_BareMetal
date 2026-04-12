@@ -42,19 +42,28 @@ typedef enum {
 } SofaState_t;
 
 /* Tunable parameters (adjustable via serial commands) */
-#define SOFA_CLOSE_TIMEOUT_MS    15000  /* max motor-on time when closing */
+#define SOFA_CLOSE_TIMEOUT_MS    10000  /* max motor-on time when closing */
 #define SOFA_RESET_DURATION_MS   10000  /* reverse time to reach absolute max open */
 #define SOFA_REPORT_INTERVAL_MS  200    /* status print interval */
 #define SOFA_CLEAR_DEBOUNCE_MS   2000   /* presence must be CLEAR this long to reset */
 #define SOFA_DETECT_DEBOUNCE_MS  500    /* presence must be DETECTED this long to close */
+
+/* Current thresholds — tune these based on motor characteristics.
+ * Nominal running current: ~1.2-1.3A swinging.
+ * Contact/stall current:   ~1.5-1.7A. */
+#define SOFA_CONTACT_THRESH_MA   1250   /* mA above which counts as contact (CLOSING) */
+#define SOFA_CONTACT_SUSTAIN_MS  300    /* how long current must stay above threshold */
+#define SOFA_STALL_THRESH_MA     1250   /* mA above which counts as stall (RESETTING) */
+#define SOFA_STALL_SUSTAIN_MS    300    /* how long stall current must persist */
 
 static SofaState_t sofa_state = SOFA_IDLE;
 static uint32_t sofa_state_enter_ms = 0;   /* tick when current state was entered */
 static uint32_t sofa_last_report_ms = 0;   /* last status print */
 static uint32_t sofa_clear_since_ms = 0;   /* tick when presence first went CLEAR */
 static uint32_t sofa_detect_since_ms = 0;  /* tick when presence first went DETECTED */
+static uint32_t sofa_overcurrent_since_ms = 0; /* tick when current first exceeded threshold */
 static bool     sofa_enabled = true;       /* false = manual mode, sofa logic paused */
-static float    sofa_current_threshold_ma = 1000.0f; /* current trip point for contact */
+static float    sofa_current_threshold_ma = SOFA_CONTACT_THRESH_MA; /* current trip point */
 static bool     sofa_prev_present = false; /* previous presence state for edge detect */
 
 /* Enter a new sofa state */
@@ -62,6 +71,7 @@ static void sofa_enter(SofaState_t new_state)
 {
     sofa_state = new_state;
     sofa_state_enter_ms = HAL_GetTick();
+    sofa_overcurrent_since_ms = 0;  /* reset sustained-current tracker */
 }
 
 int main(void)
@@ -141,6 +151,28 @@ int main(void)
     /* Sofa controller starts in IDLE */
     sofa_enter(SOFA_IDLE);
     sofa_prev_present = false;
+
+    /* Print startup config over VCP so external tools can read thresholds */
+    HAL_Delay(500);  /* let USB CDC enumerate */
+    {
+        char cfg[120];
+        char *p = cfg;
+        const char *h = "[CFG] CONTACT=";
+        while (*h) *p++ = *h++;
+        p = uint_to_str_main(p, SOFA_CONTACT_THRESH_MA);
+        h = "mA/"; while (*h) *p++ = *h++;
+        p = uint_to_str_main(p, SOFA_CONTACT_SUSTAIN_MS);
+        h = "ms STALL="; while (*h) *p++ = *h++;
+        p = uint_to_str_main(p, SOFA_STALL_THRESH_MA);
+        h = "mA/"; while (*h) *p++ = *h++;
+        p = uint_to_str_main(p, SOFA_STALL_SUSTAIN_MS);
+        h = "ms CLOSE_T="; while (*h) *p++ = *h++;
+        p = uint_to_str_main(p, SOFA_CLOSE_TIMEOUT_MS / 1000U);
+        h = "s RESET_T="; while (*h) *p++ = *h++;
+        p = uint_to_str_main(p, SOFA_RESET_DURATION_MS / 1000U);
+        h = "s\r\n"; while (*h) *p++ = *h++;
+        CDC_Transmit_HS((uint8_t *)cfg, (uint16_t)(p - cfg));
+    }
 
     while (1)
     {
@@ -254,6 +286,10 @@ void HandleSerialCmd(const char *cmd, uint16_t len)
     /* INA226 diagnostics */
     if (len == 8 && memcmp(cmd, "ina_diag", 8) == 0) {
         INA226_PrintDiag();
+        return;
+    }
+    if (len == 8 && memcmp(cmd, "ina_test", 8) == 0) {
+        INA226_SelfTest();
         return;
     }
     if (len == 8 && memcmp(cmd, "ina_read", 8) == 0) {
@@ -529,16 +565,23 @@ static void sofa_tick(void)
         break;
 
     case SOFA_CLOSING:
-        /* Motor is driving backplane toward person */
-
-        /* Check current spike (person's back contact) */
+        /* Motor is driving backplane toward person.
+         * Sustained overcurrent = contact with person's back. */
         if (!INA226_IsFault()) {
             float ma = INA226_ReadCurrent_mA();
-            if (ma < 0.0f) ma = -ma;  /* absolute value */
+            if (ma < 0.0f) ma = -ma;
             if (ma > sofa_current_threshold_ma) {
-                Motor_EmergencyStop();
-                sofa_enter(SOFA_CONTACT);
-                break;
+                /* Current above threshold — start or continue timing */
+                if (sofa_overcurrent_since_ms == 0)
+                    sofa_overcurrent_since_ms = now;
+                if (now - sofa_overcurrent_since_ms >= SOFA_CONTACT_SUSTAIN_MS) {
+                    Motor_EmergencyStop();
+                    sofa_enter(SOFA_CONTACT);
+                    break;
+                }
+            } else {
+                /* Current dropped below threshold — reset timer */
+                sofa_overcurrent_since_ms = 0;
             }
         }
 
@@ -566,20 +609,31 @@ static void sofa_tick(void)
         break;
 
     case SOFA_RESETTING:
-        /* Motor reversing to fully retracted position */
+        /* Motor reversing to fully retracted position.
+         * ALWAYS runs full SOFA_RESET_DURATION_MS regardless of C4001.
+         * Only a sustained stall overcurrent can interrupt retraction. */
+
+        /* Stall detection — safety cutoff during retraction */
+        if (!INA226_IsFault()) {
+            float ma = INA226_ReadCurrent_mA();
+            if (ma < 0.0f) ma = -ma;
+            if (ma > (float)SOFA_STALL_THRESH_MA) {
+                if (sofa_overcurrent_since_ms == 0)
+                    sofa_overcurrent_since_ms = now;
+                if (now - sofa_overcurrent_since_ms >= SOFA_STALL_SUSTAIN_MS) {
+                    Motor_EmergencyStop();
+                    sofa_enter(SOFA_IDLE);
+                    break;
+                }
+            } else {
+                sofa_overcurrent_since_ms = 0;
+            }
+        }
 
         /* After reset duration, stop and go idle */
         if (elapsed >= SOFA_RESET_DURATION_MS) {
             Motor_EmergencyStop();
             sofa_enter(SOFA_IDLE);
-        }
-
-        /* If person sits back down during reset, stop and re-close */
-        if (present && (now - sofa_detect_since_ms >= SOFA_DETECT_DEBOUNCE_MS)) {
-            Motor_EmergencyStop();
-            HAL_Delay(MOTOR_DEADTIME_MS);
-            Motor_SetDir(MOTOR_FWD);
-            sofa_enter(SOFA_CLOSING);
         }
         break;
     }
