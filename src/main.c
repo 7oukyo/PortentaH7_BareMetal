@@ -48,13 +48,27 @@ typedef enum {
 #define SOFA_CLEAR_DEBOUNCE_MS   2000   /* presence must be CLEAR this long to reset */
 #define SOFA_DETECT_DEBOUNCE_MS  500    /* presence must be DETECTED this long to close */
 
-/* Current thresholds — tune these based on motor characteristics.
- * Nominal running current: ~1.2-1.3A swinging.
- * Contact/stall current:   ~1.5-1.7A. */
-#define SOFA_CONTACT_THRESH_MA   1250   /* mA above which counts as contact (CLOSING) */
-#define SOFA_CONTACT_SUSTAIN_MS  300    /* how long current must stay above threshold */
-#define SOFA_STALL_THRESH_MA     1250   /* mA above which counts as stall (RESETTING) */
-#define SOFA_STALL_SUSTAIN_MS    300    /* how long stall current must persist */
+/* Adaptive baseline overcurrent detection.
+ * Instead of fixed thresholds, track an EMA of running current (baseline)
+ * and trigger when current exceeds baseline + offset.  This adapts to
+ * motor warm-up drift (cold ~1450mA -> warm ~1000mA). */
+#define SOFA_CONTACT_OFFSET_MA   130    /* contact = baseline + this (CLOSING) */
+#define SOFA_CONTACT_SUSTAIN_MS  200    /* how long current must stay above threshold */
+#define SOFA_STALL_OFFSET_MA     250    /* stall = baseline + this (RESETTING) */
+#define SOFA_STALL_SUSTAIN_MS    200    /* how long stall current must persist */
+#define SOFA_BASELINE_ALPHA      0.99f  /* EMA smoothing (higher = slower adapt). tau ~10s at 100ms sample */
+#define SOFA_MONITOR_SAMPLE_MS   100    /* current sample interval after settling */
+
+/* Adaptive settle detection — replaces fixed blanking window.
+ * After motor starts, samples current at a fixed interval and checks slope.
+ * While current is still falling (negative slope), it's still the startup
+ * spike decaying — keep waiting. Once current stops falling and stays flat
+ * or rises for SETTLE_STABLE_MS, declare settled and begin overcurrent
+ * detection. No hard-coded drop threshold needed. */
+#define SOFA_SETTLE_SAMPLE_MS    100    /* interval between current samples during settling */
+#define SOFA_SETTLE_NOISE_MA     30     /* drop within this counts as "flat", not "still falling" */
+#define SOFA_SETTLE_STABLE_MS    150    /* must be flat/rising this long to declare settled */
+#define SOFA_SETTLE_TIMEOUT_MS   3000   /* safety fallback if settle never detected */
 
 static SofaState_t sofa_state = SOFA_IDLE;
 static uint32_t sofa_state_enter_ms = 0;   /* tick when current state was entered */
@@ -63,8 +77,18 @@ static uint32_t sofa_clear_since_ms = 0;   /* tick when presence first went CLEA
 static uint32_t sofa_detect_since_ms = 0;  /* tick when presence first went DETECTED */
 static uint32_t sofa_overcurrent_since_ms = 0; /* tick when current first exceeded threshold */
 static bool     sofa_enabled = true;       /* false = manual mode, sofa logic paused */
-static float    sofa_current_threshold_ma = SOFA_CONTACT_THRESH_MA; /* current trip point */
+static float    sofa_contact_offset_ma = SOFA_CONTACT_OFFSET_MA; /* adjustable via sofa_thresh */
 static bool     sofa_prev_present = false; /* previous presence state for edge detect */
+
+/* Adaptive settle detection state — tracks motor startup spike slope */
+static float    sofa_settle_peak_ma = 0.0f;         /* highest current seen (diagnostics) */
+static float    sofa_settle_prev_ma = 0.0f;         /* previous sample for slope comparison */
+static uint32_t sofa_settle_last_sample_ms = 0;     /* tick of last current sample */
+static uint32_t sofa_settle_stable_since = 0;       /* tick when slope first became flat/rising */
+static bool     sofa_motor_settled = false;          /* true once startup transient is over */
+
+/* Adaptive baseline — EMA of running current, adapts to motor warm-up drift */
+static float    sofa_baseline_ma = 0.0f;             /* current EMA baseline */
 
 /* Enter a new sofa state */
 static void sofa_enter(SofaState_t new_state)
@@ -72,6 +96,12 @@ static void sofa_enter(SofaState_t new_state)
     sofa_state = new_state;
     sofa_state_enter_ms = HAL_GetTick();
     sofa_overcurrent_since_ms = 0;  /* reset sustained-current tracker */
+    sofa_settle_peak_ma = 0.0f;     /* reset settle detection */
+    sofa_settle_prev_ma = 0.0f;
+    sofa_settle_last_sample_ms = 0;
+    sofa_settle_stable_since = 0;
+    sofa_motor_settled = false;
+    sofa_baseline_ma = 0.0f;        /* re-seeded when settling completes */
 }
 
 int main(void)
@@ -155,17 +185,23 @@ int main(void)
     /* Print startup config over VCP so external tools can read thresholds */
     HAL_Delay(500);  /* let USB CDC enumerate */
     {
-        char cfg[120];
+        char cfg[160];
         char *p = cfg;
-        const char *h = "[CFG] CONTACT=";
+        const char *h = "[CFG] CONTACT=+";
         while (*h) *p++ = *h++;
-        p = uint_to_str_main(p, SOFA_CONTACT_THRESH_MA);
+        p = uint_to_str_main(p, SOFA_CONTACT_OFFSET_MA);
         h = "mA/"; while (*h) *p++ = *h++;
         p = uint_to_str_main(p, SOFA_CONTACT_SUSTAIN_MS);
-        h = "ms STALL="; while (*h) *p++ = *h++;
-        p = uint_to_str_main(p, SOFA_STALL_THRESH_MA);
+        h = "ms STALL=+"; while (*h) *p++ = *h++;
+        p = uint_to_str_main(p, SOFA_STALL_OFFSET_MA);
         h = "mA/"; while (*h) *p++ = *h++;
         p = uint_to_str_main(p, SOFA_STALL_SUSTAIN_MS);
+        h = "ms SETTLE=noise"; while (*h) *p++ = *h++;
+        p = uint_to_str_main(p, SOFA_SETTLE_NOISE_MA);
+        h = "/stable"; while (*h) *p++ = *h++;
+        p = uint_to_str_main(p, SOFA_SETTLE_STABLE_MS);
+        h = "/max"; while (*h) *p++ = *h++;
+        p = uint_to_str_main(p, SOFA_SETTLE_TIMEOUT_MS);
         h = "ms CLOSE_T="; while (*h) *p++ = *h++;
         p = uint_to_str_main(p, SOFA_CLOSE_TIMEOUT_MS / 1000U);
         h = "s RESET_T="; while (*h) *p++ = *h++;
@@ -348,18 +384,18 @@ void HandleSerialCmd(const char *cmd, uint16_t len)
         return;
     }
 
-    /* Sofa threshold adjustment: "sofa_thresh <mA>" */
+    /* Sofa contact offset adjustment: "sofa_thresh <mA>" — sets offset above baseline */
     if (len > 13 && memcmp(cmd, "sofa_thresh ", 12) == 0) {
         uint32_t val = 0;
         for (uint16_t i = 12; i < len; i++) {
             if (cmd[i] >= '0' && cmd[i] <= '9')
                 val = val * 10 + (uint32_t)(cmd[i] - '0');
         }
-        if (val > 0) sofa_current_threshold_ma = (float)val;
-        /* Echo new threshold */
+        if (val > 0) sofa_contact_offset_ma = (float)val;
+        /* Echo new offset */
         char buf[60];
         char *p = buf;
-        const char *hdr = "[SOFA] threshold=";
+        const char *hdr = "[SOFA] offset=+";
         while (*hdr) *p++ = *hdr++;
         p = uint_to_str_main(p, val);
         const char *unit = "mA\r\n";
@@ -399,24 +435,19 @@ static char *append_timestamp(char *p, uint32_t now)
     return p;
 }
 
-/* Append current reading or FAULT to buffer */
+/* Append current reading to buffer */
 static char *append_current(char *p)
 {
-    if (INA226_IsFault()) {
-        const char *ft = "I=FAULT";
-        while (*ft) *p++ = *ft++;
-    } else {
-        *p++ = 'I'; *p++ = '=';
-        float ma = INA226_ReadCurrent_mA();
-        if (ma < 0.0f) { *p++ = '-'; ma = -ma; }
-        uint32_t ma_int  = (uint32_t)ma;
-        uint32_t ma_frac = (uint32_t)((ma - (float)ma_int) * 10.0f);
-        p = uint_to_str_main(p, ma_int);
-        *p++ = '.';
-        p = uint_to_str_main(p, ma_frac);
-        const char *unit = "mA";
-        while (*unit) *p++ = *unit++;
-    }
+    *p++ = 'I'; *p++ = '=';
+    float ma = INA226_ReadCurrent_mA();
+    if (ma < 0.0f) { *p++ = '-'; ma = -ma; }
+    uint32_t ma_int  = (uint32_t)ma;
+    uint32_t ma_frac = (uint32_t)((ma - (float)ma_int) * 10.0f);
+    p = uint_to_str_main(p, ma_int);
+    *p++ = '.';
+    p = uint_to_str_main(p, ma_frac);
+    const char *unit = "mA";
+    while (*unit) *p++ = *unit++;
     return p;
 }
 
@@ -491,7 +522,7 @@ static void send_report(void)
 static void send_sofa_status(void)
 {
     uint32_t now = HAL_GetTick();
-    char buf[120];
+    char buf[160];
     char *p = buf;
 
     p = append_timestamp(p, now);
@@ -520,6 +551,18 @@ static void send_sofa_status(void)
     /* Current */
     *p++ = ' ';
     p = append_current(p);
+
+    /* Settle + baseline state — shown during CLOSING/RESETTING for debugging */
+    if (sofa_state == SOFA_CLOSING || sofa_state == SOFA_RESETTING) {
+        const char *stl = sofa_motor_settled ? " STL=1" : " STL=0";
+        while (*stl) *p++ = *stl++;
+        const char *pk = " PK=";
+        while (*pk) *p++ = *pk++;
+        p = uint_to_str_main(p, (uint32_t)sofa_settle_peak_ma);
+        const char *bl = " BL=";
+        while (*bl) *p++ = *bl++;
+        p = uint_to_str_main(p, (uint32_t)sofa_baseline_ma);
+    }
 
     /* Presence */
     C4001_PresenceData_t pres = C4001_GetPresence();
@@ -566,22 +609,69 @@ static void sofa_tick(void)
 
     case SOFA_CLOSING:
         /* Motor is driving backplane toward person.
-         * Sustained overcurrent = contact with person's back. */
-        if (!INA226_IsFault()) {
-            float ma = INA226_ReadCurrent_mA();
-            if (ma < 0.0f) ma = -ma;
-            if (ma > sofa_current_threshold_ma) {
-                /* Current above threshold — start or continue timing */
-                if (sofa_overcurrent_since_ms == 0)
-                    sofa_overcurrent_since_ms = now;
-                if (now - sofa_overcurrent_since_ms >= SOFA_CONTACT_SUSTAIN_MS) {
-                    Motor_EmergencyStop();
-                    sofa_enter(SOFA_CONTACT);
-                    break;
+         * Slope-based settle: while current is still falling, we're in the
+         * startup spike decay phase. Once it stops falling (flat/rising) for
+         * SETTLE_STABLE_MS, declare settled and begin overcurrent detection. */
+        if (!sofa_motor_settled) {
+            /* Sample at fixed interval to measure slope */
+            if (sofa_settle_last_sample_ms == 0 ||
+                (now - sofa_settle_last_sample_ms >= SOFA_SETTLE_SAMPLE_MS)) {
+                float ma = INA226_ReadCurrent_mA();
+                if (ma < 0.0f) ma = -ma;
+
+                if (ma > sofa_settle_peak_ma)
+                    sofa_settle_peak_ma = ma;
+
+                /* Need at least one prior sample to compare slope */
+                if (sofa_settle_prev_ma > 0.0f) {
+                    /* "Still falling" = prev dropped more than noise margin */
+                    bool still_falling = (sofa_settle_prev_ma - ma) > (float)SOFA_SETTLE_NOISE_MA;
+                    if (still_falling) {
+                        sofa_settle_stable_since = 0;  /* reset — still decaying */
+                    } else {
+                        if (sofa_settle_stable_since == 0)
+                            sofa_settle_stable_since = now;
+                        if (now - sofa_settle_stable_since >= SOFA_SETTLE_STABLE_MS) {
+                            sofa_motor_settled = true;
+                            sofa_baseline_ma = ma;  /* seed baseline with first stable reading */
+                        }
+                    }
                 }
-            } else {
-                /* Current dropped below threshold — reset timer */
-                sofa_overcurrent_since_ms = 0;
+
+                sofa_settle_prev_ma = ma;
+                sofa_settle_last_sample_ms = now;
+            }
+            /* Safety: force settle after timeout */
+            if (elapsed >= SOFA_SETTLE_TIMEOUT_MS) {
+                sofa_motor_settled = true;
+                sofa_baseline_ma = sofa_settle_prev_ma;  /* seed with last reading */
+            }
+        } else {
+            /* Motor settled — adaptive overcurrent = contact.
+             * Sample at fixed interval, update baseline EMA when normal,
+             * freeze baseline during overcurrent to prevent drift. */
+            if (now - sofa_settle_last_sample_ms >= SOFA_MONITOR_SAMPLE_MS) {
+                float ma = INA226_ReadCurrent_mA();
+                if (ma < 0.0f) ma = -ma;
+                float thresh = sofa_baseline_ma + sofa_contact_offset_ma;
+
+                if (ma > thresh) {
+                    /* Overcurrent — don't update baseline */
+                    if (sofa_overcurrent_since_ms == 0)
+                        sofa_overcurrent_since_ms = now;
+                    if (now - sofa_overcurrent_since_ms >= SOFA_CONTACT_SUSTAIN_MS) {
+                        Motor_EmergencyStop();
+                        sofa_enter(SOFA_CONTACT);
+                        break;
+                    }
+                } else {
+                    sofa_overcurrent_since_ms = 0;
+                    /* Update baseline EMA — tracks motor warm-up drift */
+                    sofa_baseline_ma = sofa_baseline_ma * SOFA_BASELINE_ALPHA
+                                     + ma * (1.0f - SOFA_BASELINE_ALPHA);
+                }
+
+                sofa_settle_last_sample_ms = now;
             }
         }
 
@@ -611,22 +701,59 @@ static void sofa_tick(void)
     case SOFA_RESETTING:
         /* Motor reversing to fully retracted position.
          * ALWAYS runs full SOFA_RESET_DURATION_MS regardless of C4001.
-         * Only a sustained stall overcurrent can interrupt retraction. */
+         * Same slope-based settle detection before stall monitoring. */
+        if (!sofa_motor_settled) {
+            if (sofa_settle_last_sample_ms == 0 ||
+                (now - sofa_settle_last_sample_ms >= SOFA_SETTLE_SAMPLE_MS)) {
+                float ma = INA226_ReadCurrent_mA();
+                if (ma < 0.0f) ma = -ma;
 
-        /* Stall detection — safety cutoff during retraction */
-        if (!INA226_IsFault()) {
-            float ma = INA226_ReadCurrent_mA();
-            if (ma < 0.0f) ma = -ma;
-            if (ma > (float)SOFA_STALL_THRESH_MA) {
-                if (sofa_overcurrent_since_ms == 0)
-                    sofa_overcurrent_since_ms = now;
-                if (now - sofa_overcurrent_since_ms >= SOFA_STALL_SUSTAIN_MS) {
-                    Motor_EmergencyStop();
-                    sofa_enter(SOFA_IDLE);
-                    break;
+                if (ma > sofa_settle_peak_ma)
+                    sofa_settle_peak_ma = ma;
+
+                if (sofa_settle_prev_ma > 0.0f) {
+                    bool still_falling = (sofa_settle_prev_ma - ma) > (float)SOFA_SETTLE_NOISE_MA;
+                    if (still_falling) {
+                        sofa_settle_stable_since = 0;
+                    } else {
+                        if (sofa_settle_stable_since == 0)
+                            sofa_settle_stable_since = now;
+                        if (now - sofa_settle_stable_since >= SOFA_SETTLE_STABLE_MS) {
+                            sofa_motor_settled = true;
+                            sofa_baseline_ma = ma;
+                        }
+                    }
                 }
-            } else {
-                sofa_overcurrent_since_ms = 0;
+
+                sofa_settle_prev_ma = ma;
+                sofa_settle_last_sample_ms = now;
+            }
+            if (elapsed >= SOFA_SETTLE_TIMEOUT_MS) {
+                sofa_motor_settled = true;
+                sofa_baseline_ma = sofa_settle_prev_ma;
+            }
+        } else {
+            /* Motor settled — adaptive stall detection (safety cutoff) */
+            if (now - sofa_settle_last_sample_ms >= SOFA_MONITOR_SAMPLE_MS) {
+                float ma = INA226_ReadCurrent_mA();
+                if (ma < 0.0f) ma = -ma;
+                float thresh = sofa_baseline_ma + (float)SOFA_STALL_OFFSET_MA;
+
+                if (ma > thresh) {
+                    if (sofa_overcurrent_since_ms == 0)
+                        sofa_overcurrent_since_ms = now;
+                    if (now - sofa_overcurrent_since_ms >= SOFA_STALL_SUSTAIN_MS) {
+                        Motor_EmergencyStop();
+                        sofa_enter(SOFA_IDLE);
+                        break;
+                    }
+                } else {
+                    sofa_overcurrent_since_ms = 0;
+                    sofa_baseline_ma = sofa_baseline_ma * SOFA_BASELINE_ALPHA
+                                     + ma * (1.0f - SOFA_BASELINE_ALPHA);
+                }
+
+                sofa_settle_last_sample_ms = now;
             }
         }
 

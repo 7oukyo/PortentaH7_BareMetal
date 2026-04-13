@@ -36,7 +36,7 @@ On each C4001 sensor frame (~1 Hz), `send_report()` in `src/main.c` outputs:
 Every 200ms when sofa mode is enabled, `send_sofa_status()` outputs:
 
 ```
-[<timestamp>] SOFA=<state> MTR=<FWD|REV|STOP> t=<time_in_state>s I=<mA>mA PRS=<0|1>
+[<timestamp>] SOFA=<state> MTR=<FWD|REV|STOP> t=<time_in_state>s I=<mA>mA [STL=<0|1> PK=<mA> BL=<mA>] PRS=<0|1>
 ```
 
 ### Sofa Status Fields
@@ -47,6 +47,9 @@ Every 200ms when sofa mode is enabled, `send_sofa_status()` outputs:
 | `MTR=` | `MTR=FWD` | Motor direction |
 | `t=` | `t=3.2s` | Time in current state |
 | `I=` | `I=123.4mA` or `I=FAULT` | Current from INA226 |
+| `STL=` | `STL=0` or `STL=1` | Settle state (only in CLOSING/RESETTING). 0=settling, 1=settled |
+| `PK=` | `PK=1523` | Peak current during settling phase (mA, only in CLOSING/RESETTING) |
+| `BL=` | `BL=1320` | Adaptive baseline EMA (mA, only in CLOSING/RESETTING). Threshold = BL + offset |
 | `PRS=` | `PRS=1` | C4001 presence (1=detected, 0=clear) |
 
 ### Serial Commands
@@ -56,7 +59,7 @@ Every 200ms when sofa mode is enabled, `send_sofa_status()` outputs:
 | `sofa_start` | Enable sofa auto-adjust, reset to IDLE |
 | `sofa_stop` | Disable sofa mode, emergency stop |
 | `sofa_status` | Print current state snapshot |
-| `sofa_thresh <mA>` | Set current trip threshold (default 1000) |
+| `sofa_thresh <mA>` | Set contact offset above baseline (default 200) |
 | `motor_fwd` | Manual motor forward (disables sofa mode) |
 | `motor_rev` | Manual motor reverse (disables sofa mode) |
 | `motor_stop` | Emergency stop (disables sofa mode) |
