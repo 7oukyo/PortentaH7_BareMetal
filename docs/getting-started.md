@@ -1896,3 +1896,24 @@ Quick reference for embedded jargon you'll encounter:
 6. **Disassemble your code** — Run `arm-none-eabi-objdump -d build/firmware.elf` and compare the generated assembly to your C code. You'll learn what the compiler actually does.
 7. **Break something on purpose** — Comment out a clock enable and see what happens. Remove a `volatile` and watch the optimizer break your interrupt. Intentional failures teach more than successes.
 8. **Build a new peripheral driver** — Pick something simple (an LED on a different pin, a basic timer) and write it from scratch using the reference manual. The first one is hard; the second one is twice as easy.
+
+---
+
+## Companion Reading: Senior-Level Deep Dive
+
+When the basics feel comfortable and you want to understand the things that silently corrupt firmware (and that no junior tutorial covers), read [mcu-senior-guide.md](mcu-senior-guide.md). It's a focused 15-section deep dive on:
+
+- The `volatile` myth and memory barriers (`__DSB`, `__DMB`, `__ISB`)
+- Cache coherency for DMA (the reason this project disables D-cache)
+- ISR concurrency, BASEPRI vs PRIMASK, lock-free atomics with LDREX/STREX
+- Stack overflow on Cortex-M (no MMU = silent corruption) and how to detect it
+- Weak-symbol mechanics and HAL override gotchas
+- Newlib retargeting, `_sbrk`, `_write`, and why printf costs 30 KB
+- FPU lazy stacking and the ISR floating-point trap
+- Boot modes, DFU, and dual-bank flash for OTA
+- Watchdog patterns that actually catch hangs
+- Power modes and what state survives each
+- Reading the silicon errata sheet
+- Map-file forensics for code-size optimization
+- Hardware-in-the-loop test patterns
+- The mental model shifts from server engineering to embedded

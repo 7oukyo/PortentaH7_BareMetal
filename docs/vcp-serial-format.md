@@ -86,3 +86,7 @@ When adding debugging output, use separate lines with unique prefix markers:
 ## Reading VCP Output
 
 The user reads serial output directly from the COM port (9600 baud) and reports findings back. Expected output: lines matching the format above, one per C4001 frame (~1 Hz in presence mode).
+
+## Host-side Tool
+
+[tools/current_monitor.py](../tools/current_monitor.py) plots the current trace in real time **and** provides a single-letter menu console that wraps every C4001 / INA226 / sofa / motor command — see [tools/README.md](../tools/README.md). Use this whenever you need to calibrate the C4001 (sensitivity, range, mode, delays, micro-motion) without remembering the DFRobot syntax.
