@@ -97,6 +97,12 @@ static void sofa_enter(SofaState_t new_state)
     sofa_state_enter_ms = HAL_GetTick();
     sofa_overcurrent_since_ms = 0;  /* reset sustained-current tracker */
     sofa_settle_peak_ma = 0.0f;     /* reset settle detection */
+    /* Entering IDLE restarts detect debounce so a person present during the
+     * preceding RESETTING phase does not instantly re-trigger CLOSING.
+     * The user must remain detected for SOFA_DETECT_DEBOUNCE_MS *after* IDLE. */
+    if (new_state == SOFA_IDLE) {
+        sofa_detect_since_ms = sofa_state_enter_ms;
+    }
     sofa_settle_prev_ma = 0.0f;
     sofa_settle_last_sample_ms = 0;
     sofa_settle_stable_since = 0;

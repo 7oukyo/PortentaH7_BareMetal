@@ -18,7 +18,7 @@ On each C4001 sensor frame (~1 Hz), `send_report()` in `src/main.c` outputs:
 |-------|---------|-------------|--------|
 | `[<timestamp>]` | `[12.345]` | Elapsed time in seconds (3 decimal digits) | HAL_GetTick |
 | `<status>` | `DETECTED` or `CLEAR` | Presence detection state | C4001 parsed presence bit |
-| `sofa=` | `sofa=IDLE` | Sofa state machine state | main.c sofa controller |
+| `sofa=` | `sofa=IDLE` or `sofa=MANUAL/FWD` | Sofa state machine state. AUTO names: `IDLE`, `CLOSING`, `CONTACT`, `RESETTING`. MANUAL mode (BlackPill only) names: `MANUAL/IDLE`, `MANUAL/FWD`, `MANUAL/BWD`, `MANUAL/BOTH` | main.c sofa controller |
 | `frames=` | `frames=100` | Total valid sensor frames received | Firmware counter |
 | `rx=` | `rx=2048B` | Total bytes received from sensor | Firmware counter |
 | `raw=` | `raw=$DFHPD,1` | Raw sensor presence line (for debug) | C4001 UART RX buffer |
@@ -43,7 +43,7 @@ Every 200ms when sofa mode is enabled, `send_sofa_status()` outputs:
 
 | Field | Example | Description |
 |-------|---------|-------------|
-| `SOFA=` | `SOFA=CLOSING` | Current state: IDLE, CLOSING, CONTACT, RESETTING |
+| `SOFA=` | `SOFA=CLOSING` | Current state. AUTO mode: `IDLE`, `CLOSING`, `CONTACT`, `RESETTING`. MANUAL mode (BlackPill F411 only): `MANUAL/IDLE`, `MANUAL/FWD`, `MANUAL/BWD`, `MANUAL/BOTH` |
 | `MTR=` | `MTR=FWD` | Motor direction |
 | `t=` | `t=3.2s` | Time in current state |
 | `I=` | `I=123.4mA` or `I=FAULT` | Current from INA226 |

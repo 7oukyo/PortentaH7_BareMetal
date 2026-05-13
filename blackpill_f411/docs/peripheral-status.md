@@ -35,7 +35,9 @@ Tracks bring-up of the ported sofa controller on WeAct BlackPill STM32F411CEU6.
 | C4001 mmWave | NOT FLASHED | | Driver ported verbatim from H7. Presence mode, 9600 baud |
 | INA226 Current/Power | NOT FLASHED | | Clone-chip calibration carried over: Rsh=0.025, CAL=2048 |
 | Motor Relay H-Bridge | NOT FLASHED | | Dead-time + safety invariants identical to H7 |
-| Sofa Auto-Adjust | NOT FLASHED | | State machine + adaptive baseline EMA identical to H7 |
+| Sofa Auto-Adjust | BUILD-READY | 2026-05-12 | State machine + adaptive baseline EMA identical to H7. CLEAR debounce extended to 900 s (15 min). AUTO close gated by `sofa_armed` flag — fires once per fresh presence rising edge. |
+| Manual Override (toggle + buttons) | BUILD-READY | 2026-05-12 | PB12 toggle (PU, switch-to-GND). Press = AUTO + force-close one-shot; release = MANUAL-only (motor/state preserved). Buttons (PB2 fwd / PB10 bwd, PD active HIGH from cap-touch IC) override motor in BOTH modes; release = Motor_EmergencyStop only (no state reset). Park-at-IDLE only via the 15-min retract path or `sofa_start`. AUTO close fires once per fresh presence rising edge from IDLE. See `docs/drivers/manual-buttons.md`. |
+| Direction Inversion (USER_KEY) | BUILD-READY | 2026-05-12 | `dir_inverted` flag (default true) maps "close/retract" intent to MOTOR_REV/MOTOR_FWD or vice versa. PA0 USER_KEY press flips the flag + Motor_EmergencyStop. State machine and manual buttons both route through `dir_close()`/`dir_retract()` helpers; raw `motor_fwd`/`motor_rev` serial commands are unaffected. VCP status shows `DIR=NORM` or `DIR=INV`. |
 
 ## Bring-up Order (recommended)
 
@@ -46,5 +48,14 @@ Tracks bring-up of the ported sofa controller on WeAct BlackPill STM32F411CEU6.
 5. **USART1 / C4001** — confirm presence frames parse
 6. **Relays PB0/PB1** — manual `motor_fwd/rev/stop`
 7. **Sofa end-to-end** — `sofa_start`, watch `STL=`, `BL=`, `PK=` fields in VCP
+8. **Mode toggle (PB12) + manual buttons (PB2/PB10)** — verify:
+   (a) toggle released (open) at boot → `sofa=MANUAL/IDLE`, no motor activity;
+   (b) toggle press (pin falling) → motor goes FWD into CLOSING (force-close);
+   (c) toggle release mid-CLOSING → motor keeps going forward, mode flips to MANUAL, state machine paused. Sofa is "frozen" in CLOSING until re-pressed or until manual buttons intervene;
+   (d) PB2 alone in either mode → relay 1 only; release stops motor; sofa_state unchanged;
+   (e) PB10 alone in either mode → relay 2 only; release stops motor; sofa_state unchanged;
+   (f) AUTO + fresh sit-down (radar clear → detected, 500 ms debounce) → CLOSING fires once;
+   (g) AUTO + continuous presence after a manual button override release → state machine resumes from preserved state; no spontaneous re-CLOSE on continuous presence (sofa_armed already consumed);
+   (h) Full natural cycle: CLOSING → CONTACT (current spike) → 15 min clear on radar → RESETTING → IDLE. Only this path parks the sofa at IDLE
 
-Status values: NOT FLASHED → IN PROGRESS → VERIFIED → BROKEN (with reason)
+Status values: NOT FLASHED → BUILD-READY → IN PROGRESS → VERIFIED → BROKEN (with reason)

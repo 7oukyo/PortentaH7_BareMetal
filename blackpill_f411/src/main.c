@@ -25,9 +25,14 @@
 
 static void SystemClock_Config(void);
 static void GPIO_LED_Init(void);
+static void Buttons_Init(void);
 static void send_report(void);
 static void sofa_tick(void);
 static void send_sofa_status(void);
+static void buttons_poll(uint32_t now);
+static void mode_switch_poll(uint32_t now);
+static void user_key_poll(uint32_t now);
+static void manual_tick(uint32_t now);
 static char *uint_to_str_main(char *dst, uint32_t val);
 
 /* ---- Sofa auto-adjust state machine ---- */
@@ -43,7 +48,7 @@ typedef enum {
 #define SOFA_CLOSE_TIMEOUT_MS    10000  /* max motor-on time when closing */
 #define SOFA_RESET_DURATION_MS   10000  /* reverse time to reach absolute max open */
 #define SOFA_REPORT_INTERVAL_MS  200    /* status print interval */
-#define SOFA_CLEAR_DEBOUNCE_MS   2000   /* presence must be CLEAR this long to reset */
+#define SOFA_CLEAR_DEBOUNCE_MS   900000 /* presence must be CLEAR this long to reset (15 min) */
 #define SOFA_DETECT_DEBOUNCE_MS  500    /* presence must be DETECTED this long to close */
 
 /* Adaptive baseline overcurrent detection */
@@ -69,6 +74,12 @@ static uint32_t sofa_overcurrent_since_ms = 0;
 static bool     sofa_enabled = true;
 static float    sofa_contact_offset_ma = SOFA_CONTACT_OFFSET_MA;
 static bool     sofa_prev_present = false;
+/* AUTO close fires only on a fresh presence rising edge from IDLE.
+ * Set on clear->detected transition, cleared when CLOSING is entered or
+ * whenever the state machine is forced back to IDLE (manual override
+ * release, toggle deassert, sofa_start). Prevents auto-re-close on
+ * continuous presence after a manual override. */
+static bool     sofa_armed = false;
 
 /* Adaptive settle detection state */
 static float    sofa_settle_peak_ma = 0.0f;
@@ -80,7 +91,86 @@ static bool     sofa_motor_settled = false;
 /* Adaptive baseline */
 static float    sofa_baseline_ma = 0.0f;
 
-/* Enter a new sofa state */
+/* ---- Manual override ----
+ * Mode-select toggle:  PB12 (pull-up, switch shorts pin to GND).
+ *   Press   (pin falling) -> sofa_mode = AUTO + FORCE CLOSE one-shot.
+ *   Release (pin rising)  -> sofa_mode = MANUAL-only; motor/state preserved.
+ *
+ * Manual fwd button:   PB2  (active HIGH, internal pull-down; cap-touch IC).
+ * Manual bwd button:   PB10 (active HIGH, internal pull-down; cap-touch IC).
+ *   Press   -> override motor direction; sofa_tick paused via manual_sub gate.
+ *   Release -> Motor_EmergencyStop only; sofa_state preserved.
+ *
+ * Park-at-IDLE (and the implicit `sofa_armed` clear inside `sofa_enter`) only
+ * happens via the natural 15-min retract path or an explicit `sofa_start`.
+ * Neither the toggle release nor a manual-button release can force it.
+ *
+ * Cap-touch IC has built-in adjacent-key suppression — both channels can never
+ * be HIGH simultaneously. M_BOTH is kept only as a safety interlock for a
+ * future multi-touch IC swap.
+ */
+#define MODE_SW_PORT       GPIOB
+#define MODE_SW_PIN        GPIO_PIN_12
+#define BTN_FWD_PORT       GPIOB
+#define BTN_FWD_PIN        GPIO_PIN_2
+#define BTN_BWD_PORT       GPIOB
+#define BTN_BWD_PIN        GPIO_PIN_10
+#define USER_KEY_PORT      GPIOA
+#define USER_KEY_PIN       GPIO_PIN_0
+#define BTN_DEBOUNCE_MS    25
+#define MODE_DEBOUNCE_MS   25
+#define USER_KEY_DEBOUNCE_MS 25
+
+/* Direction inversion. The sofa "close" and "retract" directions depend on
+ * how the motor leads are wired. `dir_inverted` flips which MotorDir_t
+ * corresponds to "close". Onboard USER_KEY (PA0, active LOW) toggles this
+ * at runtime so polarity can be corrected without reflashing. */
+static bool dir_inverted = true;   /* matches the as-wired sofa */
+
+static inline MotorDir_t dir_close(void)
+{
+    return dir_inverted ? MOTOR_REV : MOTOR_FWD;
+}
+static inline MotorDir_t dir_retract(void)
+{
+    return dir_inverted ? MOTOR_FWD : MOTOR_REV;
+}
+
+typedef enum {
+    SOFA_MODE_AUTO,    /* toggle asserted: sofa_tick() runs */
+    SOFA_MODE_MANUAL,  /* toggle deasserted: sofa_tick() paused */
+} SofaMode_t;
+
+typedef enum {
+    M_IDLE,
+    M_FORWARD,
+    M_BACKWARD,
+    M_BOTH,
+} ManualSubState_t;
+
+static SofaMode_t       sofa_mode = SOFA_MODE_AUTO;
+static ManualSubState_t manual_sub = M_IDLE;
+
+/* Mode-toggle debounce */
+static bool     mode_sw_state = false;       /* debounced: true = asserted (AUTO) */
+static bool     mode_sw_raw_prev = false;
+static uint32_t mode_sw_change_ms = 0;
+
+/* Button debounce */
+static bool     btn_fwd_state = false;
+static bool     btn_fwd_raw_prev = false;
+static uint32_t btn_fwd_change_ms = 0;
+static bool     btn_bwd_state = false;
+static bool     btn_bwd_raw_prev = false;
+static uint32_t btn_bwd_change_ms = 0;
+
+/* USER_KEY (PA0) debounce — onboard button, flips dir_inverted on press */
+static bool     user_key_state = false;
+static bool     user_key_raw_prev = false;
+static uint32_t user_key_change_ms = 0;
+
+/* Enter a new sofa state. Entering IDLE always disarms — AUTO close needs a
+ * fresh presence rising edge before firing again. */
 static void sofa_enter(SofaState_t new_state)
 {
     sofa_state = new_state;
@@ -92,6 +182,9 @@ static void sofa_enter(SofaState_t new_state)
     sofa_settle_stable_since = 0;
     sofa_motor_settled = false;
     sofa_baseline_ma = 0.0f;
+    if (new_state == SOFA_IDLE) {
+        sofa_armed = false;
+    }
 }
 
 int main(void)
@@ -116,12 +209,35 @@ int main(void)
     /* Motor relay H-bridge: PB0 (relay 1) + PB1 (relay 2) */
     Motor_Init();
 
+    /* Manual override buttons: PB2 (fwd) + PB10 (bwd), active HIGH, pull-down */
+    Buttons_Init();
+
     /* INA226 current/power monitor on I2C1 (PB6/PB7) */
     INA226_Init();
 
     /* Sofa controller starts in IDLE */
     sofa_enter(SOFA_IDLE);
     sofa_prev_present = false;
+    /* Seed both presence timestamps so the first force-close into CONTACT
+     * (with no one on the sofa) can still satisfy the 15-min clear gate. */
+    sofa_clear_since_ms = HAL_GetTick();
+    sofa_detect_since_ms = HAL_GetTick();
+
+    /* Sample toggle once so we boot into the mode matching its physical
+     * position without firing a force-close edge. */
+    {
+        bool asserted = (HAL_GPIO_ReadPin(MODE_SW_PORT, MODE_SW_PIN) == GPIO_PIN_RESET);
+        mode_sw_state = asserted;
+        mode_sw_raw_prev = asserted;
+        sofa_mode = asserted ? SOFA_MODE_AUTO : SOFA_MODE_MANUAL;
+    }
+
+    /* Seed USER_KEY state so a held-at-boot key doesn't trigger an inversion */
+    {
+        bool key_pressed = (HAL_GPIO_ReadPin(USER_KEY_PORT, USER_KEY_PIN) == GPIO_PIN_RESET);
+        user_key_state = key_pressed;
+        user_key_raw_prev = key_pressed;
+    }
 
     /* Print startup config over VCP */
     HAL_Delay(500);  /* let USB CDC enumerate */
@@ -153,12 +269,24 @@ int main(void)
 
     while (1)
     {
+        uint32_t now = HAL_GetTick();
         C4001_Poll();
+        buttons_poll(now);
+        mode_switch_poll(now);
+        user_key_poll(now);
+        manual_tick(now);
         if (C4001_HasNewFrame()) {
             send_report();
         }
-        if (sofa_enabled) {
+        /* sofa_tick runs only when: enabled, toggle asserted (AUTO),
+         * and no manual button is overriding the relays right now. */
+        if (sofa_enabled && sofa_mode == SOFA_MODE_AUTO && manual_sub == M_IDLE) {
             sofa_tick();
+        } else if (now - sofa_last_report_ms >= SOFA_REPORT_INTERVAL_MS) {
+            /* Paused (MANUAL-only, sofa_stop, or manual override active):
+             * keep status reports flowing on the same cadence. */
+            sofa_last_report_ms = now;
+            send_sofa_status();
         }
     }
 }
@@ -219,6 +347,41 @@ static void GPIO_LED_Init(void)
     HAL_GPIO_Init(LED_GPIO_PORT, &gpio);
 }
 
+/** @brief Init manual-override inputs:
+ *   PB12 = mode-select toggle, pull-up, active LOW (switch shorts to GND).
+ *          Asserted = AUTO armed; deasserted = MANUAL-only.
+ *   PB2  = forward button,      pull-down, active HIGH (cap-touch IC).
+ *   PB10 = backward button,     pull-down, active HIGH (cap-touch IC).
+ *   PA0  = onboard USER_KEY,    pull-up, active LOW (flips dir_inverted).
+ */
+static void Buttons_Init(void)
+{
+    __HAL_RCC_GPIOA_CLK_ENABLE();
+    __HAL_RCC_GPIOB_CLK_ENABLE();
+
+    GPIO_InitTypeDef gpio = {0};
+    gpio.Mode  = GPIO_MODE_INPUT;
+    gpio.Speed = GPIO_SPEED_FREQ_LOW;
+
+    /* Mode-select toggle: pull-up; closed-to-GND reads LOW = asserted */
+    gpio.Pull = GPIO_PULLUP;
+    gpio.Pin  = MODE_SW_PIN;
+    HAL_GPIO_Init(MODE_SW_PORT, &gpio);
+
+    /* Direction buttons: pull-down so a tristated cap-touch output reads LOW */
+    gpio.Pull = GPIO_PULLDOWN;
+    gpio.Pin  = BTN_FWD_PIN;
+    HAL_GPIO_Init(BTN_FWD_PORT, &gpio);
+
+    gpio.Pin  = BTN_BWD_PIN;
+    HAL_GPIO_Init(BTN_BWD_PORT, &gpio);
+
+    /* USER_KEY: onboard PA0 momentary, pull-up, active LOW */
+    gpio.Pull = GPIO_PULLUP;
+    gpio.Pin  = USER_KEY_PIN;
+    HAL_GPIO_Init(USER_KEY_PORT, &gpio);
+}
+
 /* ---- Serial command dispatcher ---- */
 
 void HandleSerialCmd(const char *cmd, uint16_t len)
@@ -277,6 +440,10 @@ void HandleSerialCmd(const char *cmd, uint16_t len)
 
     /* Sofa commands */
     if (len == 10 && memcmp(cmd, "sofa_start", 10) == 0) {
+        /* Resets the sofa state machine to a fresh disarmed IDLE. The toggle
+         * switch (PB12) still has authority over AUTO/MANUAL mode — if the
+         * toggle is deasserted, sofa_tick() stays paused regardless. AUTO
+         * close will fire on the next presence rising edge. */
         sofa_enabled = true;
         sofa_enter(SOFA_IDLE);
         Motor_EmergencyStop();
@@ -359,9 +526,30 @@ static char *append_current(char *p)
     return p;
 }
 
-/* Append sofa state name to buffer */
+/* Append sofa state name to buffer.
+ *   MAN/<dir>     = manual button override active (in either mode)
+ *   MANUAL/IDLE   = toggle deasserted, no button pressed
+ *   IDLE/CLOSING/CONTACT/RESETTING = AUTO state machine */
 static char *append_sofa_state(char *p)
 {
+    if (manual_sub != M_IDLE) {
+        const char *m = "MAN/";
+        while (*m) *p++ = *m++;
+        const char *sub;
+        switch (manual_sub) {
+        case M_FORWARD:  sub = "FWD";  break;
+        case M_BACKWARD: sub = "BWD";  break;
+        case M_BOTH:     sub = "BOTH"; break;
+        default:         sub = "?";    break;
+        }
+        while (*sub) *p++ = *sub++;
+        return p;
+    }
+    if (sofa_mode == SOFA_MODE_MANUAL) {
+        const char *m = "MANUAL/IDLE";
+        while (*m) *p++ = *m++;
+        return p;
+    }
     const char *name;
     switch (sofa_state) {
     case SOFA_IDLE:      name = "IDLE";      break;
@@ -465,8 +653,134 @@ static void send_sofa_status(void)
     const char *pr = pres.present ? " PRS=1" : " PRS=0";
     while (*pr) *p++ = *pr++;
 
+    const char *di = dir_inverted ? " DIR=INV" : " DIR=NORM";
+    while (*di) *p++ = *di++;
+
     *p++ = '\r'; *p++ = '\n';
     CDC_Transmit_FS((uint8_t *)buf, (uint16_t)(p - buf));
+}
+
+/* ---- Manual override: input polling + state machine ---- */
+
+/* Sample both buttons and update debounced state. Active HIGH = pressed. */
+static void buttons_poll(uint32_t now)
+{
+    bool fwd_raw = (HAL_GPIO_ReadPin(BTN_FWD_PORT, BTN_FWD_PIN) == GPIO_PIN_SET);
+    bool bwd_raw = (HAL_GPIO_ReadPin(BTN_BWD_PORT, BTN_BWD_PIN) == GPIO_PIN_SET);
+
+    if (fwd_raw != btn_fwd_raw_prev) {
+        btn_fwd_raw_prev = fwd_raw;
+        btn_fwd_change_ms = now;
+    } else if (now - btn_fwd_change_ms >= BTN_DEBOUNCE_MS) {
+        btn_fwd_state = fwd_raw;
+    }
+
+    if (bwd_raw != btn_bwd_raw_prev) {
+        btn_bwd_raw_prev = bwd_raw;
+        btn_bwd_change_ms = now;
+    } else if (now - btn_bwd_change_ms >= BTN_DEBOUNCE_MS) {
+        btn_bwd_state = bwd_raw;
+    }
+}
+
+/* USER_KEY (PA0) polling. Press edge flips dir_inverted and emergency-stops
+ * the motor so a wrong-direction run doesn't continue. Release does nothing. */
+static void user_key_poll(uint32_t now)
+{
+    bool raw = (HAL_GPIO_ReadPin(USER_KEY_PORT, USER_KEY_PIN) == GPIO_PIN_RESET);
+
+    if (raw != user_key_raw_prev) {
+        user_key_raw_prev = raw;
+        user_key_change_ms = now;
+        return;
+    }
+    if (now - user_key_change_ms < USER_KEY_DEBOUNCE_MS) return;
+    if (raw == user_key_state) return;
+
+    user_key_state = raw;
+
+    if (raw) {
+        /* Press edge: flip direction mapping and stop motor */
+        dir_inverted = !dir_inverted;
+        Motor_EmergencyStop();
+
+        char buf[32];
+        char *p = buf;
+        const char *h = "[DIR] inverted=";
+        while (*h) *p++ = *h++;
+        *p++ = dir_inverted ? '1' : '0';
+        *p++ = '\r'; *p++ = '\n';
+        CDC_Transmit_FS((uint8_t *)buf, (uint16_t)(p - buf));
+    }
+}
+
+/* Sample mode-select toggle (pull-up + switch-to-GND; pressed = pin LOW).
+ *   Press   (pin falling edge): enter AUTO + FORCE CLOSE one-shot.
+ *   Release (pin rising edge):  switch to MANUAL-only. Motor + sofa state are
+ *                               left untouched — the natural 15-min retract
+ *                               path is the only thing that parks at IDLE. */
+static void mode_switch_poll(uint32_t now)
+{
+    bool sw_raw = (HAL_GPIO_ReadPin(MODE_SW_PORT, MODE_SW_PIN) == GPIO_PIN_RESET);
+
+    if (sw_raw != mode_sw_raw_prev) {
+        mode_sw_raw_prev = sw_raw;
+        mode_sw_change_ms = now;
+        return;
+    }
+    if (now - mode_sw_change_ms < MODE_DEBOUNCE_MS) return;
+
+    bool want_pressed = sw_raw;
+    if (want_pressed == mode_sw_state) return;   /* no edge — idempotent */
+
+    mode_sw_state = want_pressed;
+
+    if (want_pressed) {
+        /* Press: AUTO + force close from any current state. A second rapid
+         * press is just another press edge — same path, no double-click timer. */
+        sofa_mode = SOFA_MODE_AUTO;
+        sofa_enabled = true;
+        if (manual_sub == M_IDLE) {
+            Motor_SetDir(dir_close());
+            sofa_enter(SOFA_CLOSING);
+        }
+        /* If a manual button is held at this instant the force-close is
+         * suppressed — manual override has priority. */
+    } else {
+        /* Release: only flip the mode flag. Motor keeps doing whatever it's
+         * doing; sofa_state and sofa_armed are preserved. The state machine
+         * is paused (sofa_tick skipped) until the next press. */
+        sofa_mode = SOFA_MODE_MANUAL;
+    }
+}
+
+/* Manual button override. Active in BOTH modes.
+ *   Press:   override motor direction. sofa_state preserved; sofa_tick is
+ *            paused via the manual_sub gate in the main loop.
+ *   Release: Motor_EmergencyStop only. sofa_state, sofa_armed, and presence
+ *            timers are preserved. Whatever state the machine was in before
+ *            the press resumes on the next sofa_tick. */
+static void manual_tick(uint32_t now)
+{
+    (void)now;
+    bool fwd = btn_fwd_state;
+    bool bwd = btn_bwd_state;
+
+    ManualSubState_t new_sub;
+    if (fwd && bwd)      new_sub = M_BOTH;       /* unreachable with current cap-touch IC */
+    else if (fwd)        new_sub = M_FORWARD;
+    else if (bwd)        new_sub = M_BACKWARD;
+    else                 new_sub = M_IDLE;
+
+    if (new_sub == manual_sub) return;
+
+    switch (new_sub) {
+    case M_IDLE:     Motor_EmergencyStop();        break;
+    case M_FORWARD:  Motor_SetDir(dir_close());    break;  /* FWD btn = close */
+    case M_BACKWARD: Motor_SetDir(dir_retract());  break;  /* BWD btn = retract */
+    case M_BOTH:     Motor_EmergencyStop();        break;
+    }
+    manual_sub = new_sub;
 }
 
 /* ---- Sofa auto-adjust state machine ---- */
@@ -480,6 +794,7 @@ static void sofa_tick(void)
 
     if (present && !sofa_prev_present) {
         sofa_detect_since_ms = now;
+        sofa_armed = true;   /* fresh sit-down — AUTO close eligible */
     }
     if (!present && sofa_prev_present) {
         sofa_clear_since_ms = now;
@@ -494,8 +809,10 @@ static void sofa_tick(void)
     switch (sofa_state) {
 
     case SOFA_IDLE:
-        if (present && (now - sofa_detect_since_ms >= SOFA_DETECT_DEBOUNCE_MS)) {
-            Motor_SetDir(MOTOR_FWD);
+        if (sofa_armed && present &&
+            (now - sofa_detect_since_ms >= SOFA_DETECT_DEBOUNCE_MS)) {
+            sofa_armed = false;   /* consume one-shot trigger */
+            Motor_SetDir(dir_close());
             sofa_enter(SOFA_CLOSING);
         }
         break;
@@ -561,14 +878,14 @@ static void sofa_tick(void)
         }
 
         if (!present && (now - sofa_clear_since_ms >= SOFA_CLEAR_DEBOUNCE_MS)) {
-            Motor_SetDir(MOTOR_REV);
+            Motor_SetDir(dir_retract());
             sofa_enter(SOFA_RESETTING);
         }
         break;
 
     case SOFA_CONTACT:
         if (!present && (now - sofa_clear_since_ms >= SOFA_CLEAR_DEBOUNCE_MS)) {
-            Motor_SetDir(MOTOR_REV);
+            Motor_SetDir(dir_retract());
             sofa_enter(SOFA_RESETTING);
         }
         break;
